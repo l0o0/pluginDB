@@ -61,6 +61,16 @@ def _relative_to_root(path: Path, root: Path) -> str:
     return str(path.relative_to(root))
 
 
+def _log_download(repo: str, release_key: str, asset_url: str, target_path: Path, root: Path) -> None:
+    print(
+        "download "
+        f"repo={repo} "
+        f"release={release_key} "
+        f"url={asset_url} "
+        f"target={_relative_to_root(target_path, root)}"
+    )
+
+
 def _resolve_final_xpi_path(
     base_dir: Path,
     plugin_name: str,
@@ -301,6 +311,13 @@ def run_sync(
                             paths.xpi_dir
                             / sanitize_name(plugin.name)
                             / f"{_build_xpi_filename(str(release['tag_name']))}.xpi"
+                        )
+                        _log_download(
+                            plugin.repo,
+                            release_ref.tag_name,
+                            str(asset["browser_download_url"]),
+                            target_path,
+                            project_root,
                         )
                         manifest_raw, md5 = _resolve_xpi(
                             str(asset["browser_download_url"]),
