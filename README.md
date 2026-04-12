@@ -11,6 +11,7 @@
 - 支持直接读取上游 `plugins.ts`
 - 支持用本地 `plugins.ts` 调试，避免每次都下载
 - 支持 `customLink` 类型的自定义 XPI 下载地址
+- 支持旧版插件包中的 `install.rdf`，当 `manifest.json` 不存在时自动回退解析
 - 支持通过 SQLAlchemy 切换数据库连接
 - `plugins` 主表只保留插件级元数据
 - `plugin_releases` 表保存版本、兼容范围、xpi 路径、md5 等 release 信息
@@ -151,6 +152,12 @@ XPI 文件命名规则：
 - 如果 tag 已经以 `v` 开头，不重复加前缀
 - 例如 `v1.2.3` 保存为 `v1.2.3.xpi`
 - 例如 `1.2.3` 保存为 `v1.2.3.xpi`
+
+XPI 元数据解析规则：
+
+- 优先解析 `manifest.json`
+- 如果没有 `manifest.json`，则回退解析 `install.rdf`
+- `install.rdf` 中的 `localized description` 也会写入 `plugin_locales`
 
 ## 开发
 

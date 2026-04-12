@@ -189,6 +189,24 @@ def _build_locales(manifest: dict[str, Any], repo_fields: dict[str, Any]) -> lis
                 "value": text_value,
             }
         )
+
+    for localized_entry in manifest.get("localized", []):
+        locale = str(localized_entry.get("locale") or "und").strip() or "und"
+        description = str(localized_entry.get("description") or "").strip()
+        if not description:
+            continue
+        key = (locale, "description", "manifest", description)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            {
+                "locale": locale,
+                "field": "description",
+                "source": "manifest",
+                "value": description,
+            }
+        )
     return items
 
 
