@@ -61,6 +61,53 @@ class ArtifactsTest(unittest.TestCase):
                 "一个简单的 Zotero 中文插件",
             )
 
+    def test_reads_install_rdf_description_from_manifest_attributes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            xpi_path = Path(tmp_dir) / "legacy-attrs.xpi"
+            install_rdf = """<?xml version="1.0"?>
+            <RDF:RDF
+                xmlns:em="http://www.mozilla.org/2004/em-rdf#"
+                xmlns:NC="http://home.netscape.com/NC-rdf#"
+                xmlns:RDF="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <RDF:Description
+                    RDF:about="rdf:#$x61SL3"
+                    em:id="{7B7BE31E-0C0F-436B-8A26-4C199B543C9E}"
+                    em:minVersion="2.0"
+                    em:maxVersion="20.*"/>
+                <RDF:Description
+                    RDF:about="urn:mozilla:install-manifest"
+                    em:id="zoterozotcard@018.ai"
+                    em:name="ZotCard"
+                    em:version="2.8.1"
+                    em:type="2"
+                    em:creator="018"
+                    em:description="写卡更柔顺，读卡更顺滑。"
+                    em:homepageURL="https://github.com/018/zotcard"
+                    em:updateURL="https://raw.githubusercontent.com/018/zotcard/main/update.rdf">
+                    <em:targetApplication>
+                        <Description>
+                            <em:id>zotero@chnm.gmu.edu</em:id>
+                            <em:minVersion>5.0.66</em:minVersion>
+                            <em:maxVersion>*</em:maxVersion>
+                        </Description>
+                    </em:targetApplication>
+                </RDF:Description>
+            </RDF:RDF>
+            """
+            with zipfile.ZipFile(xpi_path, "w") as archive:
+                archive.writestr("install.rdf", install_rdf)
+
+            payload = read_manifest_from_xpi(xpi_path)
+
+            self.assertEqual(payload["name"], "ZotCard")
+            self.assertEqual(payload["version"], "2.8.1")
+            self.assertEqual(payload["author"], "018")
+            self.assertEqual(payload["description"], "写卡更柔顺，读卡更顺滑。")
+            self.assertEqual(payload["homepage_url"], "https://github.com/018/zotcard")
+            self.assertEqual(payload["applications"]["zotero"]["id"], "zoterozotcard@018.ai")
+            self.assertEqual(payload["applications"]["zotero"]["strict_min_version"], "5.0.66")
+            self.assertEqual(payload["applications"]["zotero"]["strict_max_version"], "*")
+
     def test_reads_manifest_and_md5_from_xpi(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             xpi_path = Path(tmp_dir) / "demo.xpi"

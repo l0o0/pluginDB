@@ -14,6 +14,7 @@ import zipfile
 CHUNK_SIZE = 1024 * 1024
 EM_NS = "http://www.mozilla.org/2004/em-rdf#"
 RDF_NAMESPACES = {"em": EM_NS, "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"}
+RDF_NS = RDF_NAMESPACES["rdf"]
 
 
 def sanitize_name(value: str) -> str:
@@ -55,55 +56,106 @@ def _find_child_text(element: ET.Element, tag: str) -> str | None:
     return child.text.strip()
 
 
+def _local_name(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1]
+    return tag
+
+
+def _find_em_value(element: ET.Element, tag: str) -> str | None:
+    child_value = _find_child_text(element, tag)
+    if child_value:
+        return child_value
+
+    attr_names = (f"{{{EM_NS}}}{tag}", f"em:{tag}", tag)
+    for attr_name in attr_names:
+        attr_value = element.attrib.get(attr_name)
+        if attr_value is not None and attr_value.strip():
+            return attr_value.strip()
+    return None
+
+
+def _find_nested_description(element: ET.Element) -> ET.Element | None:
+    for child in element:
+        if _local_name(child.tag) != "Description":
+            continue
+        return child
+    return None
+
+
+def _find_description_by_about(root: ET.Element, about: str) -> ET.Element | None:
+    for element in root.iter():
+        if _local_name(element.tag) != "Description":
+            continue
+        about_value = (
+            element.attrib.get(f"{{{RDF_NS}}}about")
+            or element.attrib.get("about")
+            or element.attrib.get("RDF:about")
+        )
+        if about_value == about:
+            return element
+    return None
+
+
+def _resolve_target_description(root: ET.Element, target: ET.Element) -> ET.Element | None:
+    description = _find_nested_description(target)
+    if description is not None:
+        return description
+
+    resource = (
+        target.attrib.get(f"{{{RDF_NS}}}resource")
+        or target.attrib.get("resource")
+        or target.attrib.get("RDF:resource")
+    )
+    if resource:
+        return _find_description_by_about(root, resource)
+    return None
+
+
 def _parse_install_rdf(text: str) -> dict[str, Any]:
     root = ET.fromstring(text)
-    manifest = root.find(".//rdf:Description[@about='urn:mozilla:install-manifest']", RDF_NAMESPACES)
-    if manifest is None:
-        manifest = root.find(".//Description[@about='urn:mozilla:install-manifest']", RDF_NAMESPACES)
+    manifest = _find_description_by_about(root, "urn:mozilla:install-manifest")
     if manifest is None:
         raise ValueError("install.rdf does not contain install-manifest description")
 
-    addon_id = _find_child_text(manifest, "id")
+    addon_id = _find_em_value(manifest, "id")
     applications: dict[str, Any] = {}
 
     for target in manifest.findall("em:targetApplication", RDF_NAMESPACES):
-        description = target.find("rdf:Description", RDF_NAMESPACES)
-        if description is None:
-            description = target.find("Description", RDF_NAMESPACES)
+        description = _resolve_target_description(root, target)
         if description is None:
             continue
-        app_id = _find_child_text(description, "id")
+        app_id = _find_em_value(description, "id")
         if app_id == "zotero@chnm.gmu.edu":
             applications["zotero"] = {
                 "id": addon_id,
-                "strict_min_version": _find_child_text(description, "minVersion"),
-                "strict_max_version": _find_child_text(description, "maxVersion"),
-                "update_url": _find_child_text(manifest, "updateURL"),
+                "strict_min_version": _find_em_value(description, "minVersion"),
+                "strict_max_version": _find_em_value(description, "maxVersion"),
+                "update_url": _find_em_value(manifest, "updateURL"),
             }
 
     localized: list[dict[str, Any]] = []
     for localized_node in manifest.findall("em:localized", RDF_NAMESPACES):
-        description = localized_node.find("rdf:Description", RDF_NAMESPACES)
-        if description is None:
-            description = localized_node.find("Description", RDF_NAMESPACES)
+        description = _find_nested_description(localized_node)
         if description is None:
             continue
         entry = {
-            "locale": _find_child_text(description, "locale"),
-            "name": _find_child_text(description, "name"),
-            "description": _find_child_text(description, "description"),
+            "locale": _find_em_value(description, "locale"),
+            "name": _find_em_value(description, "name"),
+            "description": _find_em_value(description, "description"),
         }
         if any(entry.values()):
             localized.append(entry)
 
     payload = {
-        "name": _find_child_text(manifest, "name"),
-        "version": _find_child_text(manifest, "version"),
-        "author": _find_child_text(manifest, "creator"),
-        "homepage_url": _find_child_text(manifest, "homepageURL"),
-        "update_url": _find_child_text(manifest, "updateURL"),
+        "name": _find_em_value(manifest, "name"),
+        "version": _find_em_value(manifest, "version"),
+        "author": _find_em_value(manifest, "creator"),
+        "homepage_url": _find_em_value(manifest, "homepageURL"),
+        "update_url": _find_em_value(manifest, "updateURL"),
         "description": next((item["description"] for item in localized if item.get("locale") == "en-US" and item.get("description")), None)
-        or next((item["description"] for item in localized if item.get("description")), None),
+        or next((item["description"] for item in localized if item.get("description")), None)
+        or _find_em_value(manifest, "description"),
         "applications": applications,
     }
     if localized:
