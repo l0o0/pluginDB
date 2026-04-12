@@ -7,6 +7,7 @@ import re
 @dataclass(frozen=True)
 class ReleaseRef:
     tag_name: str
+    custom_link: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,12 @@ def _parse_release_refs(plugin_block: str) -> list[ReleaseRef]:
     for release_block in _extract_object_literals(releases_text):
         tag_name = _match_field(release_block, "tagName")
         if tag_name:
-            refs.append(ReleaseRef(tag_name=tag_name))
+            refs.append(
+                ReleaseRef(
+                    tag_name=tag_name,
+                    custom_link=_match_field(release_block, "customLink"),
+                )
+            )
     return refs or [ReleaseRef(tag_name="latest")]
 
 

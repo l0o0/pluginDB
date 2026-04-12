@@ -50,6 +50,31 @@ class ParsePluginsTsTest(unittest.TestCase):
         self.assertEqual(plugins[0].repo, "MuiseDestiny/ZoteroStyle")
         self.assertEqual([item.tag_name for item in plugins[0].releases], ["latest", "pre"])
 
+    def test_parses_custom_link_release(self) -> None:
+        text = """
+        export const plugins = [
+          {
+            repo: 'MuiseDestiny/ZoteroStyle',
+            releases: [
+              {
+                targetZoteroVersion: '8',
+                tagName: 'custom',
+                customLink: 'https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi'
+              }
+            ]
+          }
+        ]
+        """
+
+        plugins = parse_plugins_ts(text)
+
+        self.assertEqual(len(plugins), 1)
+        self.assertEqual(plugins[0].releases[0].tag_name, "custom")
+        self.assertEqual(
+            plugins[0].releases[0].custom_link,
+            "https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi",
+        )
+
     def test_ignores_entries_without_repo(self) -> None:
         text = """
         export const plugins = [

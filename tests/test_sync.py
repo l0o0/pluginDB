@@ -8,6 +8,68 @@ from plugindb_sync.storage import create_engine, fetch_all, fetch_one
 
 
 class SyncTest(unittest.TestCase):
+    def test_syncs_release_with_custom_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+
+            result = run_sync(
+                root=root,
+                plugins_ts_text="""
+                export const plugins = [
+                  {
+                    repo: 'MuiseDestiny/ZoteroStyle',
+                    releases: [
+                      {
+                        targetZoteroVersion: '8',
+                        tagName: 'custom',
+                        customLink: 'https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi'
+                      }
+                    ]
+                  }
+                ]
+                """,
+                downloaded_xpi_manifests={
+                    "https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi": {
+                        "name": "Ethereal Style",
+                        "version": "5.8.6",
+                        "description": "desc",
+                        "homepage_url": "https://example.com",
+                        "author": "author",
+                        "applications": {
+                            "zotero": {
+                                "id": "zoterostyle@polygon.org",
+                                "strict_min_version": "6.999",
+                                "strict_max_version": "8.*",
+                            }
+                        },
+                    }
+                },
+                github_repo_map={
+                    "MuiseDestiny/ZoteroStyle": {
+                        "description": "Repo description",
+                        "homepage": "https://repo.example.com",
+                        "html_url": "https://github.com/MuiseDestiny/ZoteroStyle",
+                    }
+                },
+            )
+
+            self.assertEqual(result.plugin_count, 1)
+            self.assertEqual(result.success_count, 1)
+            engine = create_engine(f"sqlite+pysqlite:///{root / 'data' / 'db' / 'plugins.sqlite3'}")
+            release_row = fetch_one(
+                engine,
+                "SELECT tag, asset_url, xpi_path, manifest_version FROM plugin_releases",
+            )
+            self.assertEqual(
+                release_row,
+                (
+                    "custom",
+                    "https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi",
+                    "data/xpi/ZoteroStyle/v5.8.6.xpi",
+                    "5.8.6",
+                ),
+            )
+
     def test_reads_plugins_from_local_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

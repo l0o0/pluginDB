@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .artifacts import calculate_md5, download_file, read_manifest_from_xpi, sanitize_name, sanitize_tag, write_manifest_xpi
 from .config import AppPaths
@@ -60,6 +61,23 @@ def _relative_to_root(path: Path, root: Path) -> str:
     return str(path.relative_to(root))
 
 
+def _resolve_final_xpi_path(
+    base_dir: Path,
+    plugin_name: str,
+    release_ref: Any,
+    manifest: dict[str, Any],
+    provisional_path: Path,
+) -> Path:
+    if not release_ref.custom_link:
+        return provisional_path
+
+    manifest_version = str(manifest.get("version") or "").strip()
+    if not manifest_version:
+        return provisional_path
+
+    return base_dir / sanitize_name(plugin_name) / f"{_build_xpi_filename(manifest_version)}.xpi"
+
+
 def _extract_manifest_fields(manifest: dict[str, Any]) -> dict[str, Any]:
     zotero = dict(((manifest.get("applications") or {}).get("zotero") or {}))
     return {
@@ -96,14 +114,27 @@ def _materialize_test_xpi(target_path: Path, manifest: dict[str, Any]) -> None:
 
 def _resolve_release(
     plugin: PluginRef,
-    tag_name: str,
+    release_ref: Any,
     github_release_map: dict[str, list[dict[str, Any]]] | None,
     github_token: str | None,
 ) -> dict[str, Any]:
+    if release_ref.custom_link:
+        asset_name = Path(urlparse(release_ref.custom_link).path).name or f"{sanitize_name(plugin.name)}.xpi"
+        return {
+            "tag_name": release_ref.tag_name,
+            "prerelease": False,
+            "published_at": "",
+            "assets": [
+                {
+                    "name": asset_name,
+                    "browser_download_url": release_ref.custom_link,
+                }
+            ],
+        }
     if github_release_map is not None:
         releases = github_release_map.get(plugin.repo, [])
-        return pick_release_for_tag(releases, tag_name)
-    return fetch_release(plugin.repo, tag_name, github_token=github_token)
+        return pick_release_for_tag(releases, release_ref.tag_name)
+    return fetch_release(plugin.repo, release_ref.tag_name, github_token=github_token)
 
 
 def _resolve_xpi(
@@ -239,7 +270,6 @@ def run_sync(
         try:
             ensure_schema(engine)
             for plugin in plugins:
-                print(f"Syncing {plugin.repo}...")
                 try:
                     repo_fields = _extract_repo_fields(
                         _resolve_repo_metadata(plugin, github_repo_map, github_token),
@@ -247,7 +277,7 @@ def run_sync(
                     )
                     release_payloads: dict[str, dict[str, Any]] = {}
                     for release_ref in plugin.releases:
-                        release = _resolve_release(plugin, release_ref.tag_name, github_release_map, github_token)
+                        release = _resolve_release(plugin, release_ref, github_release_map, github_token)
                         asset = pick_xpi_asset(release)
                         target_path = (
                             paths.xpi_dir
@@ -260,6 +290,19 @@ def run_sync(
                             downloaded_xpi_manifests,
                             github_token,
                         )
+                        final_target_path = _resolve_final_xpi_path(
+                            paths.xpi_dir,
+                            plugin.name,
+                            release_ref,
+                            manifest_raw,
+                            target_path,
+                        )
+                        if final_target_path != target_path:
+                            final_target_path.parent.mkdir(parents=True, exist_ok=True)
+                            if final_target_path.exists():
+                                final_target_path.unlink()
+                            target_path.replace(final_target_path)
+                            target_path = final_target_path
                         manifest = _extract_manifest_fields(manifest_raw)
                         release_payloads[_release_key(release_ref.tag_name)] = {
                             "tag": str(release["tag_name"]),
