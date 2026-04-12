@@ -12,6 +12,7 @@
 - 支持用本地 `plugins.ts` 调试，避免每次都下载
 - 支持 `customLink` 类型的自定义 XPI 下载地址
 - 支持旧版插件包中的 `install.rdf`，当 `manifest.json` 不存在时自动回退解析
+- 支持 `init` / `sync` 两种运行模式
 - 支持通过 SQLAlchemy 切换数据库连接
 - `plugins` 主表只保留插件级元数据
 - `plugin_releases` 表保存版本、兼容范围、xpi 路径、md5 等 release 信息
@@ -54,7 +55,6 @@ pluginDB/
     json/
     xpi/
     db/
-  logs/
 ```
 
 说明：
@@ -88,7 +88,7 @@ pip install -e .
 
 ```bash
 source ~/myenv/bin/activate
-python3 scripts/sync_plugins.py --root "$(pwd)"
+python3 scripts/sync_plugins.py --root "$(pwd)" --mode sync
 ```
 
 ### 2. 使用本地 `plugins.ts` 调试
@@ -99,10 +99,25 @@ python3 scripts/sync_plugins.py --root "$(pwd)"
 source ~/myenv/bin/activate
 python3 scripts/sync_plugins.py \
   --root "$(pwd)" \
+  --mode sync \
   --plugins-file "$(pwd)/plugins.ts"
 ```
 
-### 3. 指定数据库连接
+### 3. 初始化历史版本
+
+如果你希望按 `plugins.ts` 中声明的 release 全量初始化，包括历史 tag：
+
+```bash
+source ~/myenv/bin/activate
+python3 scripts/sync_plugins.py \
+  --root "$(pwd)" \
+  --mode init \
+  --plugins-file "$(pwd)/plugins.ts"
+```
+
+`sync` 模式只处理动态 release，例如 `latest`、`pre`、`custom`，适合定时任务。
+
+### 4. 指定数据库连接
 
 默认会使用根目录下 `data/db/plugins.sqlite3`。如果你想明确指定，或者切换到其他数据库：
 
@@ -121,7 +136,7 @@ python3 scripts/sync_plugins.py \
   --database-url "postgresql+psycopg://user:password@127.0.0.1:5432/plugindb"
 ```
 
-### 4. 使用 GitHub Token
+### 5. 使用 GitHub Token
 
 GitHub API 或下载资源时如果遇到限流，可以传 token：
 
@@ -144,14 +159,21 @@ python3 scripts/sync_plugins.py \
   下载后的插件包
 - `data/db/plugins.sqlite3`
   默认 SQLite 数据库
-- `logs/`
-  适合定时运行时写日志
+
+运行过程中会直接打印标准输出日志，便于追踪下载和跳过行为，例如：
+
+```text
+action=download repo=demo/repo release=latest url=https://example.com/demo.xpi target=data/xpi/Demo/v1.2.3.xpi
+action=skip repo=MuiseDestiny/ZoteroStyle release=custom@zotero-8 url=https://example.com/style.xpi target=data/xpi/ZoteroStyle/v5.8.6.xpi
+```
 
 XPI 文件命名规则：
 
 - 如果 tag 已经以 `v` 开头，不重复加前缀
 - 例如 `v1.2.3` 保存为 `v1.2.3.xpi`
 - 例如 `1.2.3` 保存为 `v1.2.3.xpi`
+- `customLink` 下载完成后会按解析出的插件版本保存，例如 `v5.8.6.xpi`
+- 如果数据库里已经记录了对应 release 且本地 XPI 文件存在，则会直接跳过下载，也不会重复计算 `md5`
 
 XPI 元数据解析规则：
 
@@ -209,5 +231,5 @@ python3 scripts/sync_plugins.py --help
 `cron` 示例：
 
 ```cron
-0 */5 * * * /absolute/path/to/pluginDB/scripts/run_sync.sh >> /absolute/path/to/pluginDB/logs/sync.log 2>&1
+0 */5 * * * cd /absolute/path/to/pluginDB && /bin/zsh -lc 'source ~/myenv/bin/activate && python3 scripts/sync_plugins.py --root "$(pwd)" --mode sync'
 ```

@@ -28,6 +28,7 @@ class ParsePluginsTsTest(unittest.TestCase):
         self.assertEqual(len(plugins), 1)
         self.assertEqual(plugins[0].repo, "MuiseDestiny/ZoteroStyle")
         self.assertEqual([item.tag_name for item in plugins[0].releases], ["latest"])
+        self.assertEqual(plugins[0].releases[0].target_zotero_version, "7")
 
     def test_parses_repo_and_release_definitions(self) -> None:
         text = """
@@ -74,6 +75,7 @@ class ParsePluginsTsTest(unittest.TestCase):
             plugins[0].releases[0].custom_link,
             "https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi",
         )
+        self.assertEqual(plugins[0].releases[0].target_zotero_version, "8")
 
     def test_ignores_entries_without_repo(self) -> None:
         text = """

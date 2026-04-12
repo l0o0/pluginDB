@@ -19,6 +19,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync Zotero plugin metadata into local storage")
     parser.add_argument("--root", type=Path, default=PROJECT_ROOT, help="Project root directory")
     parser.add_argument(
+        "--mode",
+        choices=("init", "sync"),
+        default="sync",
+        help="init downloads all declared releases; sync only checks dynamic releases like latest/pre/custom",
+    )
+    parser.add_argument(
         "--database-url",
         default=None,
         help="SQLAlchemy database URL. Defaults to a SQLite file under the root data directory",
@@ -46,6 +52,7 @@ def main() -> int:
     args = parse_args()
     result = run_sync(
         root=args.root,
+        mode=args.mode,
         database_url=args.database_url,
         plugins_ts_path=args.plugins_file,
         github_token=args.github_token,

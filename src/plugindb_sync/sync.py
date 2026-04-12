@@ -12,7 +12,7 @@ from .artifacts import calculate_md5, download_file, read_manifest_from_xpi, san
 from .config import AppPaths
 from .github_client import fetch_plugins_ts, fetch_release, fetch_repo_metadata, pick_release_for_tag, pick_xpi_asset
 from .plugin_source import PluginRef, parse_plugins_ts
-from .storage import create_engine, ensure_schema, upsert_plugin_record
+from .storage import create_engine, ensure_schema, find_cached_release, upsert_plugin_record
 
 
 DEFAULT_PLUGINS_TS_URL = "https://raw.githubusercontent.com/zotero-chinese/zotero-plugins/main/src/plugins.ts"
@@ -61,14 +61,35 @@ def _relative_to_root(path: Path, root: Path) -> str:
     return str(path.relative_to(root))
 
 
-def _log_download(repo: str, release_key: str, asset_url: str, target_path: Path, root: Path) -> None:
+def _log_transfer(action: str, repo: str, release_key: str, asset_url: str, target_path: Path, root: Path) -> None:
     print(
-        "download "
+        f"action={action} "
         f"repo={repo} "
         f"release={release_key} "
         f"url={asset_url} "
         f"target={_relative_to_root(target_path, root)}"
     )
+
+
+def _should_process_release(mode: str, release_ref: Any) -> bool:
+    if mode == "init":
+        return True
+    return release_ref.tag_name in {"latest", "pre", "custom"}
+
+
+def _existing_cached_target(
+    root: Path,
+    provisional_path: Path,
+    cached_release: dict[str, Any] | None,
+) -> Path | None:
+    cached_path_value = str((cached_release or {}).get("xpi_path") or "").strip()
+    if cached_path_value:
+        cached_path = root / cached_path_value
+        if cached_path.exists():
+            return cached_path
+    if provisional_path.exists():
+        return provisional_path
+    return None
 
 
 def _resolve_final_xpi_path(
@@ -114,8 +135,11 @@ def _extract_repo_fields(repo_metadata: dict[str, Any] | None, repo: str) -> dic
     }
 
 
-def _release_key(tag_name: str) -> str:
-    return tag_name
+def _release_key(release_ref: Any) -> str:
+    target_zotero_version = str(getattr(release_ref, "target_zotero_version", "") or "").strip()
+    if not target_zotero_version:
+        return release_ref.tag_name
+    return f"{release_ref.tag_name}@zotero-{target_zotero_version}"
 
 
 def _materialize_test_xpi(target_path: Path, manifest: dict[str, Any]) -> None:
@@ -239,6 +263,7 @@ def _build_plugin_record(
     for key, item in release_payloads.items():
         json_releases[key] = {
             "tag": item["tag"],
+            "target_zotero_version": item.get("target_zotero_version"),
             "prerelease": item["prerelease"],
             "published_at": item["published_at"],
             "asset_name": item["asset_name"],
@@ -267,6 +292,7 @@ def _build_plugin_record(
 
 def run_sync(
     root: Path | str,
+    mode: str = "sync",
     plugins_ts_text: str | None = None,
     plugins_ts_path: Path | str | None = None,
     github_release_map: dict[str, list[dict[str, Any]]] | None = None,
@@ -305,42 +331,73 @@ def run_sync(
                     )
                     release_payloads: dict[str, dict[str, Any]] = {}
                     for release_ref in plugin.releases:
+                        if not _should_process_release(mode, release_ref):
+                            continue
+                        release_key = _release_key(release_ref)
                         release = _resolve_release(plugin, release_ref, github_release_map, github_token)
                         asset = pick_xpi_asset(release)
-                        target_path = (
+                        provisional_target_path = (
                             paths.xpi_dir
                             / sanitize_name(plugin.name)
                             / f"{_build_xpi_filename(str(release['tag_name']))}.xpi"
                         )
-                        _log_download(
-                            plugin.repo,
-                            release_ref.tag_name,
-                            str(asset["browser_download_url"]),
-                            target_path,
+                        cached_release = find_cached_release(engine, plugin.repo, release_key)
+                        asset_url = str(asset["browser_download_url"])
+                        existing_target_path = _existing_cached_target(
                             project_root,
+                            provisional_target_path,
+                            cached_release,
                         )
-                        manifest_raw, md5 = _resolve_xpi(
-                            str(asset["browser_download_url"]),
-                            target_path,
-                            downloaded_xpi_manifests,
-                            github_token,
-                        )
+                        if existing_target_path is not None:
+                            _log_transfer(
+                                "skip",
+                                plugin.repo,
+                                release_key,
+                                asset_url,
+                                existing_target_path,
+                                project_root,
+                            )
+                            target_path = existing_target_path
+                            manifest_raw = read_manifest_from_xpi(target_path)
+                            md5 = str((cached_release or {}).get("md5") or "")
+                        else:
+                            manifest_raw, md5 = _resolve_xpi(
+                                asset_url,
+                                provisional_target_path,
+                                downloaded_xpi_manifests,
+                                github_token,
+                            )
+                            target_path = provisional_target_path
                         final_target_path = _resolve_final_xpi_path(
                             paths.xpi_dir,
                             plugin.name,
                             release_ref,
                             manifest_raw,
-                            target_path,
+                            provisional_target_path,
                         )
-                        if final_target_path != target_path:
-                            final_target_path.parent.mkdir(parents=True, exist_ok=True)
+                        if existing_target_path is None and final_target_path != target_path:
                             if final_target_path.exists():
-                                final_target_path.unlink()
-                            target_path.replace(final_target_path)
-                            target_path = final_target_path
+                                target_path.unlink(missing_ok=True)
+                                target_path = final_target_path
+                                md5 = str((cached_release or {}).get("md5") or calculate_md5(target_path))
+                            else:
+                                final_target_path.parent.mkdir(parents=True, exist_ok=True)
+                                if target_path.exists():
+                                    target_path.replace(final_target_path)
+                                target_path = final_target_path
+                        if existing_target_path is None:
+                            _log_transfer(
+                                "download",
+                                plugin.repo,
+                                release_key,
+                                asset_url,
+                                target_path,
+                                project_root,
+                            )
                         manifest = _extract_manifest_fields(manifest_raw)
-                        release_payloads[_release_key(release_ref.tag_name)] = {
+                        release_payloads[release_key] = {
                             "tag": str(release["tag_name"]),
+                            "target_zotero_version": release_ref.target_zotero_version,
                             "prerelease": bool(release.get("prerelease")),
                             "published_at": str(release.get("published_at") or ""),
                             "asset_name": str(asset["name"]),
@@ -354,6 +411,9 @@ def run_sync(
                             "manifest_json_text": json.dumps(manifest_raw, ensure_ascii=False, sort_keys=True),
                             "manifest": manifest,
                         }
+
+                    if not release_payloads:
+                        continue
 
                     record = _build_plugin_record(plugin, release_payloads, repo_fields, synced_at)
                     json_path = paths.json_dir / f"{sanitize_name(record['id'])}.json"

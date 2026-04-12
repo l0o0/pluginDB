@@ -13,6 +13,7 @@ from sqlalchemy import Text
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy import delete
 from sqlalchemy import insert
+from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy import update
 from sqlalchemy.pool import NullPool
@@ -85,6 +86,30 @@ def fetch_all(engine: Engine, sql: str) -> list[tuple[Any, ...]]:
     with engine.connect() as connection:
         rows = connection.execute(text(sql)).fetchall()
     return [tuple(row) for row in rows]
+
+
+def find_cached_release(engine: Engine, source_repo: str, release_key: str) -> dict[str, Any] | None:
+    statement = (
+        select(
+            plugin_releases_table.c.xpi_path,
+            plugin_releases_table.c.md5,
+            plugin_releases_table.c.manifest_version,
+        )
+        .select_from(
+            plugins_table.join(
+                plugin_releases_table,
+                plugins_table.c.id == plugin_releases_table.c.plugin_id,
+            )
+        )
+        .where(
+            plugins_table.c.source_repo == source_repo,
+            plugin_releases_table.c.release_key == release_key,
+        )
+        .limit(1)
+    )
+    with engine.connect() as connection:
+        row = connection.execute(statement).mappings().first()
+    return dict(row) if row is not None else None
 
 
 def _plugin_values(record: dict[str, Any]) -> dict[str, Any]:
