@@ -26,6 +26,13 @@ class SyncResult:
     failures: list[str]
 
 
+@dataclass(frozen=True)
+class ResolvedXpi:
+    target_path: Path
+    manifest_raw: dict[str, Any]
+    md5: str
+
+
 @contextmanager
 def _file_lock(lock_path: Path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -323,6 +330,7 @@ def run_sync(
     with _file_lock(paths.lock_path):
         try:
             ensure_schema(engine)
+            processed_xpi_urls: dict[str, ResolvedXpi] = {}
             for plugin in plugins:
                 try:
                     repo_fields = _extract_repo_fields(
@@ -348,7 +356,21 @@ def run_sync(
                             provisional_target_path,
                             cached_release,
                         )
-                        if existing_target_path is not None:
+                        is_duplicate_url = asset_url in processed_xpi_urls
+                        if is_duplicate_url:
+                            resolved_xpi = processed_xpi_urls[asset_url]
+                            target_path = resolved_xpi.target_path
+                            manifest_raw = resolved_xpi.manifest_raw
+                            md5 = resolved_xpi.md5
+                            _log_transfer(
+                                "skip_duplicate",
+                                plugin.repo,
+                                release_key,
+                                asset_url,
+                                target_path,
+                                project_root,
+                            )
+                        elif existing_target_path is not None:
                             _log_transfer(
                                 "skip",
                                 plugin.repo,
@@ -375,7 +397,7 @@ def run_sync(
                             manifest_raw,
                             provisional_target_path,
                         )
-                        if existing_target_path is None and final_target_path != target_path:
+                        if not is_duplicate_url and existing_target_path is None and final_target_path != target_path:
                             if final_target_path.exists():
                                 target_path.unlink(missing_ok=True)
                                 target_path = final_target_path
@@ -385,7 +407,7 @@ def run_sync(
                                 if target_path.exists():
                                     target_path.replace(final_target_path)
                                 target_path = final_target_path
-                        if existing_target_path is None:
+                        if not is_duplicate_url and existing_target_path is None:
                             _log_transfer(
                                 "download",
                                 plugin.repo,
@@ -394,6 +416,11 @@ def run_sync(
                                 target_path,
                                 project_root,
                             )
+                        processed_xpi_urls[asset_url] = ResolvedXpi(
+                            target_path=target_path,
+                            manifest_raw=manifest_raw,
+                            md5=md5,
+                        )
                         manifest = _extract_manifest_fields(manifest_raw)
                         release_payloads[release_key] = {
                             "tag": str(release["tag_name"]),

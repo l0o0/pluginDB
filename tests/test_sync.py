@@ -400,6 +400,79 @@ class SyncTest(unittest.TestCase):
             self.assertIn("release=custom@zotero-8", output)
             self.assertIn("target=data/xpi/ZoteroStyle/v5.8.6.xpi", output)
 
+    def test_reuses_duplicate_release_url_within_same_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            stream = io.StringIO()
+
+            with redirect_stdout(stream):
+                result = run_sync(
+                    root=root,
+                    mode="init",
+                    plugins_ts_text="""
+                    export const plugins = [
+                      {
+                        repo: 'MuiseDestiny/ZoteroStyle',
+                        releases: [
+                          {
+                            targetZoteroVersion: '8',
+                            tagName: 'custom',
+                            customLink: 'https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi'
+                          },
+                          {
+                            targetZoteroVersion: '9',
+                            tagName: 'custom',
+                            customLink: 'https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi'
+                          }
+                        ]
+                      }
+                    ]
+                    """,
+                    downloaded_xpi_manifests={
+                        "https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-style.xpi": {
+                            "name": "Ethereal Style",
+                            "version": "5.8.6",
+                            "description": "desc",
+                            "homepage_url": "https://example.com",
+                            "author": "author",
+                            "applications": {
+                                "zotero": {
+                                    "id": "zoterostyle@polygon.org",
+                                    "strict_min_version": "6.999",
+                                    "strict_max_version": "9.*",
+                                }
+                            },
+                        }
+                    },
+                    github_repo_map={
+                        "MuiseDestiny/ZoteroStyle": {
+                            "description": "Repo description",
+                            "homepage": "https://repo.example.com",
+                            "html_url": "https://github.com/MuiseDestiny/ZoteroStyle",
+                        }
+                    },
+                )
+
+            self.assertEqual(result.success_count, 1)
+            output = stream.getvalue()
+            self.assertEqual(output.count("action=download"), 1)
+            self.assertEqual(output.count("action=skip_duplicate"), 1)
+            self.assertIn("release=custom@zotero-9", output)
+            self.assertIn("target=data/xpi/ZoteroStyle/v5.8.6.xpi", output)
+
+            engine = create_engine(f"sqlite+pysqlite:///{root / 'data' / 'db' / 'plugins.sqlite3'}")
+            rows = fetch_all(
+                engine,
+                "SELECT release_key, xpi_path FROM plugin_releases ORDER BY release_key",
+            )
+            self.assertEqual(
+                rows,
+                [
+                    ("custom@zotero-8", "data/xpi/ZoteroStyle/v5.8.6.xpi"),
+                    ("custom@zotero-9", "data/xpi/ZoteroStyle/v5.8.6.xpi"),
+                ],
+            )
+
     def test_reads_plugins_from_local_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

@@ -165,6 +165,7 @@ python3 scripts/sync_plugins.py \
 ```text
 action=download repo=demo/repo release=latest url=https://example.com/demo.xpi target=data/xpi/Demo/v1.2.3.xpi
 action=skip repo=MuiseDestiny/ZoteroStyle release=custom@zotero-8 url=https://example.com/style.xpi target=data/xpi/ZoteroStyle/v5.8.6.xpi
+action=skip_duplicate repo=MuiseDestiny/ZoteroStyle release=custom@zotero-9 url=https://example.com/style.xpi target=data/xpi/ZoteroStyle/v5.8.6.xpi
 ```
 
 XPI 文件命名规则：
@@ -174,6 +175,7 @@ XPI 文件命名规则：
 - 例如 `1.2.3` 保存为 `v1.2.3.xpi`
 - `customLink` 下载完成后会按解析出的插件版本保存，例如 `v5.8.6.xpi`
 - 如果数据库里已经记录了对应 release 且本地 XPI 文件存在，则会直接跳过下载，也不会重复计算 `md5`
+- 同一次运行内，如果多个 release 指向同一个 XPI URL，只会下载和解析一次，后续 release 会复用第一次的结果
 
 XPI 元数据解析规则：
 
