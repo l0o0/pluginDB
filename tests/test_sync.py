@@ -274,6 +274,114 @@ class SyncTest(unittest.TestCase):
             self.assertIn("repo=demo/repo", output)
             self.assertIn("target=data/xpi/Demo/v1.2.3.xpi", output)
 
+    def test_downloads_new_latest_when_cached_release_tag_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            plugins_text = """
+            export const plugins = [
+              { name: 'Demo', repo: 'demo/repo', releases: [{ tagName: 'latest' }] }
+            ]
+            """
+            repo_map = {
+                "demo/repo": {
+                    "description": "Repo description",
+                    "homepage": "https://repo.example.com",
+                    "html_url": "https://github.com/demo/repo",
+                }
+            }
+
+            first_result = run_sync(
+                root=root,
+                plugins_ts_text=plugins_text,
+                github_release_map={
+                    "demo/repo": [
+                        {
+                            "tag_name": "v1.0.0",
+                            "prerelease": False,
+                            "published_at": "2026-04-11T00:00:00Z",
+                            "assets": [
+                                {
+                                    "name": "demo.xpi",
+                                    "browser_download_url": "https://example.com/demo-v1.xpi",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                downloaded_xpi_manifests={
+                    "https://example.com/demo-v1.xpi": {
+                        "name": "Demo",
+                        "version": "1.0.0",
+                        "description": "desc",
+                        "homepage_url": "https://example.com",
+                        "author": "author",
+                        "applications": {
+                            "zotero": {
+                                "id": "demo@example.com",
+                                "strict_min_version": "7.0",
+                                "strict_max_version": "8.*",
+                            }
+                        },
+                    }
+                },
+                github_repo_map=repo_map,
+            )
+            self.assertEqual(first_result.success_count, 1)
+
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                second_result = run_sync(
+                    root=root,
+                    plugins_ts_text=plugins_text,
+                    github_release_map={
+                        "demo/repo": [
+                            {
+                                "tag_name": "v1.1.0",
+                                "prerelease": False,
+                                "published_at": "2026-05-14T00:00:00Z",
+                                "assets": [
+                                    {
+                                        "name": "demo.xpi",
+                                        "browser_download_url": "https://example.com/demo-v2.xpi",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    downloaded_xpi_manifests={
+                        "https://example.com/demo-v2.xpi": {
+                            "name": "Demo",
+                            "version": "1.1.0",
+                            "description": "desc",
+                            "homepage_url": "https://example.com",
+                            "author": "author",
+                            "applications": {
+                                "zotero": {
+                                    "id": "demo@example.com",
+                                    "strict_min_version": "7.0",
+                                    "strict_max_version": "8.*",
+                                }
+                            },
+                        }
+                    },
+                    github_repo_map=repo_map,
+                )
+
+            self.assertEqual(second_result.success_count, 1)
+            output = stream.getvalue()
+            self.assertIn("action=download", output)
+            self.assertIn("url=https://example.com/demo-v2.xpi", output)
+            self.assertNotIn("action=skip", output)
+            engine = create_engine(f"sqlite+pysqlite:///{root / 'data' / 'db' / 'plugins.sqlite3'}")
+            release_row = fetch_one(
+                engine,
+                "SELECT tag, asset_url, xpi_path, manifest_version FROM plugin_releases",
+            )
+            self.assertEqual(
+                release_row,
+                ("v1.1.0", "https://example.com/demo-v2.xpi", "data/xpi/Demo/v1.1.0.xpi", "1.1.0"),
+            )
+
     def test_syncs_release_with_custom_link(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

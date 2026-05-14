@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from html.parser import HTMLParser
 import json
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 
 DEFAULT_TIMEOUT = 30
+GITHUB_BASE_URL = "https://github.com"
 
 
 def _request_json(url: str, github_token: str | None = None) -> Any:
@@ -28,6 +29,42 @@ def fetch_plugins_ts(url: str) -> str:
         return response.read().decode("utf-8")
 
 
+def _request_text(url: str) -> tuple[str, str]:
+    request = Request(url, headers={"User-Agent": "plugindb-sync/0.1"})
+    with urlopen(request, timeout=DEFAULT_TIMEOUT) as response:
+        return response.read().decode("utf-8"), response.geturl()
+
+
+class _ExpandedAssetsParser(HTMLParser):
+    def __init__(self, repo: str) -> None:
+        super().__init__()
+        self.repo = repo
+        self.assets: list[dict[str, Any]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a":
+            return
+        href = dict(attrs).get("href")
+        if not href:
+            return
+        prefix = f"/{self.repo}/releases/download/"
+        if not href.startswith(prefix) or not href.lower().endswith(".xpi"):
+            return
+        name = href.rstrip("/").rsplit("/", 1)[-1]
+        self.assets.append(
+            {
+                "name": name,
+                "browser_download_url": f"{GITHUB_BASE_URL}{href}",
+            }
+        )
+
+
+def parse_expanded_assets_html(repo: str, html: str) -> list[dict[str, Any]]:
+    parser = _ExpandedAssetsParser(repo)
+    parser.feed(html)
+    return parser.assets
+
+
 def list_releases(repo: str, github_token: str | None = None) -> list[dict[str, Any]]:
     data = _request_json(f"https://api.github.com/repos/{repo}/releases", github_token=github_token)
     if not isinstance(data, list):
@@ -44,13 +81,16 @@ def fetch_repo_metadata(repo: str, github_token: str | None = None) -> dict[str,
 
 def fetch_release(repo: str, tag_name: str, github_token: str | None = None) -> dict[str, Any]:
     if tag_name == "latest":
-        data = _request_json(
-            f"https://api.github.com/repos/{repo}/releases/latest",
-            github_token=github_token,
-        )
-        if not isinstance(data, dict):
-            raise ValueError(f"Expected release object for {repo}")
-        return data
+        try:
+            data = _request_json(
+                f"https://api.github.com/repos/{repo}/releases/latest",
+                github_token=github_token,
+            )
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected release object for {repo}")
+            return data
+        except Exception:
+            return fetch_latest_release_from_github_web(repo)
     if tag_name == "pre":
         return pick_release_for_tag(list_releases(repo, github_token=github_token), "pre")
     data = _request_json(
@@ -60,6 +100,24 @@ def fetch_release(repo: str, tag_name: str, github_token: str | None = None) -> 
     if not isinstance(data, dict):
         raise ValueError(f"Expected tag release object for {repo}:{tag_name}")
     return data
+
+
+def fetch_latest_release_from_github_web(repo: str) -> dict[str, Any]:
+    _, final_url = _request_text(f"{GITHUB_BASE_URL}/{repo}/releases/latest")
+    tag_name = urlparse(final_url).path.rstrip("/").rsplit("/", 1)[-1]
+    if not tag_name or tag_name == "latest":
+        raise ValueError(f"Cannot resolve latest release tag for {repo}")
+
+    html, _ = _request_text(f"{GITHUB_BASE_URL}/{repo}/releases/expanded_assets/{quote(tag_name, safe='')}")
+    assets = parse_expanded_assets_html(repo, html)
+    if not assets:
+        raise ValueError(f"No .xpi asset found for latest release {repo}:{tag_name}")
+    return {
+        "tag_name": tag_name,
+        "prerelease": False,
+        "published_at": "",
+        "assets": assets,
+    }
 
 
 def pick_release_for_tag(releases: list[dict[str, Any]], tag_name: str) -> dict[str, Any]:

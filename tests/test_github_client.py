@@ -1,6 +1,6 @@
 import unittest
 
-from plugindb_sync.github_client import pick_release_for_tag
+from plugindb_sync.github_client import parse_expanded_assets_html, pick_release_for_tag
 
 
 class PickReleaseForTagTest(unittest.TestCase):
@@ -21,6 +21,24 @@ class PickReleaseForTagTest(unittest.TestCase):
         ]
 
         self.assertEqual(pick_release_for_tag(releases, "v1.0.0")["tag_name"], "v1.0.0")
+
+    def test_parses_expanded_assets_html_for_xpi_assets(self) -> None:
+        html = """
+        <a href="/l0o0/jasminum/releases/download/v1.1.37/jasminum_1.1.37.xpi">jasminum_1.1.37.xpi</a>
+        <a href="/l0o0/jasminum/archive/refs/tags/v1.1.37.zip">Source code</a>
+        """
+
+        assets = parse_expanded_assets_html("l0o0/jasminum", html)
+
+        self.assertEqual(
+            assets,
+            [
+                {
+                    "name": "jasminum_1.1.37.xpi",
+                    "browser_download_url": "https://github.com/l0o0/jasminum/releases/download/v1.1.37/jasminum_1.1.37.xpi",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

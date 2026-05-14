@@ -91,6 +91,8 @@ def fetch_all(engine: Engine, sql: str) -> list[tuple[Any, ...]]:
 def find_cached_release(engine: Engine, source_repo: str, release_key: str) -> dict[str, Any] | None:
     statement = (
         select(
+            plugin_releases_table.c.tag,
+            plugin_releases_table.c.asset_url,
             plugin_releases_table.c.xpi_path,
             plugin_releases_table.c.md5,
             plugin_releases_table.c.manifest_version,
