@@ -19,4 +19,6 @@ fi
 
 mkdir -p "$TARGET_DIR"
 rsync -a --delete "$SOURCE_DIR"/ "$TARGET_DIR"/
+find "$TARGET_DIR" -type d -exec chmod 755 {} +
+find "$TARGET_DIR" -type f -exec chmod 644 {} +
 echo "published_addons source=$SOURCE_DIR target=$TARGET_DIR"
