@@ -89,13 +89,14 @@ def _existing_cached_target(
     provisional_path: Path,
     cached_release: dict[str, Any] | None,
     resolved_tag: str,
+    allow_cached_path_mismatch: bool = False,
 ) -> Path | None:
     if cached_release and str(cached_release.get("tag") or "") != resolved_tag:
         return None
     cached_path_value = str((cached_release or {}).get("xpi_path") or "").strip()
     if cached_path_value:
         cached_path = root / cached_path_value
-        if cached_path.exists():
+        if cached_path.exists() and (allow_cached_path_mismatch or cached_path == provisional_path):
             return cached_path
     if provisional_path.exists():
         return provisional_path
@@ -359,6 +360,7 @@ def run_sync(
                             provisional_target_path,
                             cached_release,
                             str(release["tag_name"]),
+                            bool(release_ref.custom_link),
                         )
                         is_duplicate_url = asset_url in processed_xpi_urls
                         if is_duplicate_url:

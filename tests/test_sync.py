@@ -382,6 +382,127 @@ class SyncTest(unittest.TestCase):
                 ("v1.1.0", "https://example.com/demo-v2.xpi", "data/xpi/Demo/v1.1.0.xpi", "1.1.0"),
             )
 
+    def test_redownloads_when_cached_path_does_not_match_release_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            plugins_text = """
+            export const plugins = [
+              { name: 'Demo', repo: 'demo/repo', releases: [{ tagName: 'latest' }] }
+            ]
+            """
+            repo_map = {
+                "demo/repo": {
+                    "description": "Repo description",
+                    "homepage": "https://repo.example.com",
+                    "html_url": "https://github.com/demo/repo",
+                }
+            }
+
+            first_result = run_sync(
+                root=root,
+                plugins_ts_text=plugins_text,
+                github_release_map={
+                    "demo/repo": [
+                        {
+                            "tag_name": "v1.0.0",
+                            "prerelease": False,
+                            "published_at": "2026-04-11T00:00:00Z",
+                            "assets": [
+                                {
+                                    "name": "demo.xpi",
+                                    "browser_download_url": "https://example.com/demo-v1.xpi",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                downloaded_xpi_manifests={
+                    "https://example.com/demo-v1.xpi": {
+                        "name": "Demo",
+                        "version": "1.0.0",
+                        "description": "desc",
+                        "homepage_url": "https://example.com",
+                        "author": "author",
+                        "applications": {
+                            "zotero": {
+                                "id": "demo@example.com",
+                                "strict_min_version": "7.0",
+                                "strict_max_version": "8.*",
+                            }
+                        },
+                    }
+                },
+                github_repo_map={
+                    "demo/repo": repo_map["demo/repo"],
+                },
+            )
+            self.assertEqual(first_result.success_count, 1)
+
+            db_path = root / "data" / "db" / "plugins.sqlite3"
+            engine = create_engine(f"sqlite+pysqlite:///{db_path}")
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE plugin_releases SET xpi_path = ? WHERE plugin_id = ? AND release_key = ?",
+                    ("data/xpi/Demo/v1.0.0-old.xpi", "demo@example.com", "latest"),
+                )
+
+            stale_path = root / "data" / "xpi" / "Demo" / "v1.0.0-old.xpi"
+            current_path = root / "data" / "xpi" / "Demo" / "v1.0.0.xpi"
+            stale_path.parent.mkdir(parents=True, exist_ok=True)
+            current_path.replace(stale_path)
+
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                second_result = run_sync(
+                    root=root,
+                    plugins_ts_text=plugins_text,
+                    github_release_map={
+                        "demo/repo": [
+                            {
+                                "tag_name": "v1.0.0",
+                                "prerelease": False,
+                                "published_at": "2026-04-11T00:00:00Z",
+                                "assets": [
+                                    {
+                                        "name": "demo.xpi",
+                                        "browser_download_url": "https://example.com/demo-v1.xpi",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    downloaded_xpi_manifests={
+                        "https://example.com/demo-v1.xpi": {
+                            "name": "Demo",
+                            "version": "1.0.0",
+                            "description": "desc",
+                            "homepage_url": "https://example.com",
+                            "author": "author",
+                            "applications": {
+                                "zotero": {
+                                    "id": "demo@example.com",
+                                    "strict_min_version": "7.0",
+                                    "strict_max_version": "8.*",
+                                }
+                            },
+                        }
+                    },
+                    github_repo_map={
+                        "demo/repo": repo_map["demo/repo"],
+                    },
+                )
+
+            self.assertEqual(second_result.success_count, 1)
+            output = stream.getvalue()
+            self.assertIn("action=download", output)
+            self.assertIn("target=data/xpi/Demo/v1.0.0.xpi", output)
+
+            release_row = fetch_one(
+                engine,
+                "SELECT tag, xpi_path, manifest_version FROM plugin_releases WHERE plugin_id = 'demo@example.com'",
+            )
+            self.assertEqual(release_row, ("v1.0.0", "data/xpi/Demo/v1.0.0.xpi", "1.0.0"))
+
     def test_syncs_release_with_custom_link(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
