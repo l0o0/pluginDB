@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from sqlalchemy import Column
@@ -21,8 +22,12 @@ from sqlalchemy.pool import NullPool
 
 metadata = MetaData()
 
+PLUGINS_TABLE_NAME = os.getenv("PLUGINDB_PLUGINS_TABLE", "plugins")
+PLUGIN_RELEASES_TABLE_NAME = os.getenv("PLUGINDB_PLUGIN_RELEASES_TABLE", "plugin_releases")
+PLUGIN_LOCALES_TABLE_NAME = os.getenv("PLUGINDB_PLUGIN_LOCALES_TABLE", "plugin_locales")
+
 plugins_table = Table(
-    "plugins",
+    PLUGINS_TABLE_NAME,
     metadata,
     Column("id", String, primary_key=True),
     Column("plugin_name", Text, nullable=False),
@@ -36,7 +41,7 @@ plugins_table = Table(
 )
 
 plugin_releases_table = Table(
-    "plugin_releases",
+    PLUGIN_RELEASES_TABLE_NAME,
     metadata,
     Column("plugin_id", String, primary_key=True),
     Column("release_key", String, primary_key=True),
@@ -55,7 +60,7 @@ plugin_releases_table = Table(
 )
 
 plugin_locales_table = Table(
-    "plugin_locales",
+    PLUGIN_LOCALES_TABLE_NAME,
     metadata,
     Column("plugin_id", String, primary_key=True),
     Column("locale", String, primary_key=True),
