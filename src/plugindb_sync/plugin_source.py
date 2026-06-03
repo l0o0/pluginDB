@@ -16,6 +16,7 @@ class PluginRef:
     name: str
     repo: str
     releases: list[ReleaseRef]
+    tags: list[str]
 
 
 _FIELD_PATTERN = r"{field}\s*:\s*(['\"])(.*?)\1"
@@ -71,6 +72,19 @@ def _match_field(text: str, field: str) -> str | None:
     return match.group(2).strip() if match else None
 
 
+def _parse_string_array(text: str, field: str) -> list[str]:
+    match = re.search(rf"{re.escape(field)}\s*:\s*\[", text, re.DOTALL)
+    if not match:
+        return []
+    array_text, _ = _extract_bracketed(text, match.end() - 1, "[", "]")
+    values: list[str] = []
+    for item in re.finditer(r"(['\"])(.*?)\1", array_text, re.DOTALL):
+        value = item.group(2).strip()
+        if value:
+            values.append(value)
+    return values
+
+
 def _parse_release_refs(plugin_block: str) -> list[ReleaseRef]:
     releases_match = re.search(r"releases\s*:\s*\[", plugin_block)
     if not releases_match:
@@ -108,6 +122,7 @@ def parse_plugins_ts(text: str) -> list[PluginRef]:
                 name=name,
                 repo=repo,
                 releases=_parse_release_refs(plugin_block),
+                tags=_parse_string_array(plugin_block, "tags"),
             )
         )
     return plugins

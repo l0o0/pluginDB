@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import json
 import os
+from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import Boolean
 from sqlalchemy import Column
+from sqlalchemy import DateTime
 from sqlalchemy import Engine
 from sqlalchemy import Integer
+from sqlalchemy import JSON
 from sqlalchemy import MetaData
 from sqlalchemy import String
 from sqlalchemy import Table
@@ -14,6 +17,7 @@ from sqlalchemy import Text
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy import delete
 from sqlalchemy import insert
+from sqlalchemy import inspect
 from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy import update
@@ -37,7 +41,10 @@ plugins_table = Table(
     Column("homepage_url", Text),
     Column("author", Text),
     Column("update_url", Text),
-    Column("synced_at", Text, nullable=False),
+    Column("tags", JSON, nullable=False, default=list),
+    Column("github_stars", Integer, nullable=False, default=0),
+    Column("download_count", Integer, nullable=False, default=0),
+    Column("synced_at", DateTime(timezone=True), nullable=False),
 )
 
 plugin_releases_table = Table(
@@ -46,17 +53,18 @@ plugin_releases_table = Table(
     Column("plugin_id", String, primary_key=True),
     Column("release_key", String, primary_key=True),
     Column("tag", Text, nullable=False),
-    Column("prerelease", Integer, nullable=False),
-    Column("published_at", Text),
+    Column("prerelease", Boolean, nullable=False),
+    Column("published_at", DateTime(timezone=True)),
     Column("asset_name", Text, nullable=False),
     Column("asset_url", Text, nullable=False),
     Column("xpi_path", Text, nullable=False),
     Column("md5", String, nullable=False),
+    Column("download_count", Integer, nullable=False, default=0),
     Column("manifest_version", Text, nullable=False),
     Column("manifest_min_zotero_version", Text),
     Column("manifest_max_zotero_version", Text),
-    Column("manifest_json", Text, nullable=False),
-    Column("synced_at", Text, nullable=False),
+    Column("manifest_json", JSON, nullable=False),
+    Column("synced_at", DateTime(timezone=True), nullable=False),
 )
 
 plugin_locales_table = Table(
@@ -67,7 +75,7 @@ plugin_locales_table = Table(
     Column("field", String, primary_key=True),
     Column("source", String, primary_key=True),
     Column("value", Text, nullable=False),
-    Column("synced_at", Text, nullable=False),
+    Column("synced_at", DateTime(timezone=True), nullable=False),
 )
 
 
@@ -77,8 +85,38 @@ def create_engine(database_url: str) -> Engine:
     return sa_create_engine(database_url, future=True)
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _add_column_if_missing(engine: Engine, table_name: str, column_name: str, column_sql: str) -> None:
+    with engine.begin() as connection:
+        columns = {column["name"] for column in inspect(connection).get_columns(table_name)}
+        if column_name in columns:
+            return
+        connection.execute(
+            text(f"ALTER TABLE {_quote_identifier(table_name)} ADD COLUMN {_quote_identifier(column_name)} {column_sql}")
+        )
+
+
 def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
+    _add_column_if_missing(engine, PLUGINS_TABLE_NAME, "tags", "TEXT NOT NULL DEFAULT '[]'")
+    _add_column_if_missing(engine, PLUGINS_TABLE_NAME, "github_stars", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(engine, PLUGINS_TABLE_NAME, "download_count", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(engine, PLUGIN_RELEASES_TABLE_NAME, "download_count", "INTEGER NOT NULL DEFAULT 0")
 
 
 def fetch_one(engine: Engine, sql: str) -> tuple[Any, ...] | None:
@@ -129,7 +167,10 @@ def _plugin_values(record: dict[str, Any]) -> dict[str, Any]:
         "homepage_url": record.get("homepage_url"),
         "author": record.get("author"),
         "update_url": record.get("update_url"),
-        "synced_at": record["synced_at"],
+        "tags": record.get("tags") or [],
+        "github_stars": int(record.get("github_stars") or 0),
+        "download_count": int(record.get("download_count") or 0),
+        "synced_at": _parse_datetime(record["synced_at"]),
     }
 
 
@@ -163,18 +204,18 @@ def upsert_plugin_record(engine: Engine, record: dict[str, Any]) -> None:
                     plugin_id=record["id"],
                     release_key=release_key,
                     tag=release["tag"],
-                    prerelease=1 if release.get("prerelease") else 0,
-                    published_at=release.get("published_at"),
+                    prerelease=bool(release.get("prerelease")),
+                    published_at=_parse_datetime(release.get("published_at")),
                     asset_name=release["asset_name"],
                     asset_url=release["asset_url"],
                     xpi_path=release["xpi_path"],
                     md5=release["md5"],
+                    download_count=int(release.get("download_count") or 0),
                     manifest_version=release["manifest_version"],
                     manifest_min_zotero_version=release.get("manifest_min_zotero_version"),
                     manifest_max_zotero_version=release.get("manifest_max_zotero_version"),
-                    manifest_json=release.get("manifest_json_text")
-                    or json.dumps(release.get("manifest_json") or {}, ensure_ascii=False, sort_keys=True),
-                    synced_at=record["synced_at"],
+                    manifest_json=release.get("manifest_json") or {},
+                    synced_at=_parse_datetime(record["synced_at"]),
                 )
             )
 
@@ -189,6 +230,6 @@ def upsert_plugin_record(engine: Engine, record: dict[str, Any]) -> None:
                     field=locale_entry["field"],
                     source=locale_entry["source"],
                     value=locale_entry["value"],
-                    synced_at=record["synced_at"],
+                    synced_at=_parse_datetime(record["synced_at"]),
                 )
             )

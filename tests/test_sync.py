@@ -846,5 +846,85 @@ class SyncTest(unittest.TestCase):
             self.assertEqual(release_row, ("v1.2.3", "data/xpi/Demo/v1.2.3.xpi", "1.2.3"))
 
 
+    def test_sync_persists_tags_and_github_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+
+            result = run_sync(
+                root=root,
+                plugins_ts_text="""
+                export const plugins = [
+                  {
+                    name: 'Demo',
+                    repo: 'demo/repo',
+                    tags: ['style', 'notes'],
+                    releases: [{ tagName: 'latest' }]
+                  }
+                ]
+                """,
+                github_release_map={
+                    "demo/repo": [
+                        {
+                            "tag_name": "v1.2.3",
+                            "prerelease": False,
+                            "published_at": "2026-04-11T00:00:00Z",
+                            "assets": [
+                                {
+                                    "name": "demo.xpi",
+                                    "browser_download_url": "https://example.com/demo.xpi",
+                                    "download_count": 789,
+                                }
+                            ],
+                        }
+                    ]
+                },
+                downloaded_xpi_manifests={
+                    "https://example.com/demo.xpi": {
+                        "name": "Demo",
+                        "version": "1.2.3",
+                        "description": "desc",
+                        "homepage_url": "https://example.com",
+                        "author": "author",
+                        "applications": {
+                            "zotero": {
+                                "id": "demo@example.com",
+                                "strict_min_version": "7.0",
+                                "strict_max_version": "8.*",
+                            }
+                        },
+                    }
+                },
+                github_repo_map={
+                    "demo/repo": {
+                        "description": "Repo description",
+                        "homepage": "https://repo.example.com",
+                        "html_url": "https://github.com/demo/repo",
+                        "stargazers_count": 42,
+                    }
+                },
+            )
+
+            self.assertEqual(result.success_count, 1)
+            json_files = list((root / "data" / "json").glob("*.json"))
+            payload = json.loads(json_files[0].read_text())
+            self.assertEqual(payload["tags"], ["style", "notes"])
+            self.assertEqual(payload["github_stars"], 42)
+            self.assertEqual(payload["download_count"], 789)
+            self.assertEqual(payload["releases"]["latest"]["download_count"], 789)
+
+            engine = create_engine(f"sqlite+pysqlite:///{root / 'data' / 'db' / 'plugins.sqlite3'}")
+            plugin_row = fetch_one(
+                engine,
+                "SELECT tags, github_stars, download_count FROM plugins",
+            )
+            release_row = fetch_one(
+                engine,
+                "SELECT download_count FROM plugin_releases",
+            )
+            self.assertEqual(plugin_row, ('["style", "notes"]', 42, 789))
+            self.assertEqual(release_row, (789,))
+
+
+
 if __name__ == "__main__":
     unittest.main()

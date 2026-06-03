@@ -62,7 +62,7 @@ def main() -> int:
         mode=args.mode,
         database_url=args.database_url or os.getenv("PLUGINDB_DATABASE_URL"),
         plugins_ts_path=args.plugins_file,
-        github_token=args.github_token,
+        github_token=args.github_token or os.getenv("PLUGINDB_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"),
         plugins_url=args.plugins_url,
     )
     print(

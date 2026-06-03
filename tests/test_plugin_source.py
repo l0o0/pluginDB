@@ -27,6 +27,7 @@ class ParsePluginsTsTest(unittest.TestCase):
 
         self.assertEqual(len(plugins), 1)
         self.assertEqual(plugins[0].repo, "MuiseDestiny/ZoteroStyle")
+        self.assertEqual(plugins[0].tags, ["style"])
         self.assertEqual([item.tag_name for item in plugins[0].releases], ["latest"])
         self.assertEqual(plugins[0].releases[0].target_zotero_version, "7")
 
