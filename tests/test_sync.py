@@ -1,5 +1,6 @@
 import json
 import io
+import zipfile
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -229,11 +230,8 @@ class SyncTest(unittest.TestCase):
                 },
             }
 
-            import zipfile
-            import json as _json
-
             with zipfile.ZipFile(cached_xpi, "w") as archive:
-                archive.writestr("manifest.json", _json.dumps(manifest))
+                archive.writestr("manifest.json", json.dumps(manifest))
 
             stream = io.StringIO()
             with redirect_stdout(stream):
@@ -772,6 +770,120 @@ class SyncTest(unittest.TestCase):
                 locale_rows,
                 [("und", "github_repo", "Repo description"), ("und", "manifest", "desc")],
             )
+
+    def test_sync_resolves_webextension_localized_manifest_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            cached_xpi = root / "data" / "xpi" / "Localized" / "v1.2.3.xpi"
+            cached_xpi.parent.mkdir(parents=True, exist_ok=True)
+            manifest = {
+                "name": "__MSG_name__",
+                "version": "1.2.3",
+                "description": "__MSG_description__",
+                "default_locale": "zh",
+                "homepage_url": "https://example.com",
+                "author": "author",
+                "applications": {
+                    "zotero": {
+                        "id": "localized@example.com",
+                        "strict_min_version": "7.0",
+                        "strict_max_version": "8.*",
+                    }
+                },
+            }
+
+            with zipfile.ZipFile(cached_xpi, "w") as archive:
+                archive.writestr("manifest.json", json.dumps(manifest))
+                archive.writestr(
+                    "_locales/zh/messages.json",
+                    json.dumps({"name": {"message": "中文名称"}, "description": {"message": "中文描述"}}),
+                )
+                archive.writestr(
+                    "_locales/en/messages.json",
+                    json.dumps({"name": {"message": "English Name"}, "description": {"message": "English description"}}),
+                )
+
+            (root / "data" / "db").mkdir(parents=True, exist_ok=True)
+            engine = create_engine(f"sqlite+pysqlite:///{root / 'data' / 'db' / 'plugins.sqlite3'}")
+            from plugindb_sync.storage import ensure_schema, upsert_plugin_record
+            ensure_schema(engine)
+            upsert_plugin_record(
+                engine,
+                {
+                    "id": "localized@example.com",
+                    "plugin_name": "stale",
+                    "sanitized_name": "Localized",
+                    "source_repo": "demo/repo",
+                    "source_url": "https://github.com/demo/repo",
+                    "homepage_url": "https://repo.example.com",
+                    "author": "author",
+                    "update_url": None,
+                    "tags": [],
+                    "github_stars": 0,
+                    "download_count": 0,
+                    "releases": {
+                        "latest": {
+                            "tag": "v1.2.3",
+                            "prerelease": False,
+                            "published_at": "2026-04-11T00:00:00Z",
+                            "asset_name": "localized.xpi",
+                            "asset_url": "https://example.com/localized.xpi",
+                            "xpi_path": "data/xpi/Localized/v1.2.3.xpi",
+                            "md5": "abc",
+                            "download_count": 0,
+                            "manifest_version": "1.2.3",
+                            "manifest_min_zotero_version": "7.0",
+                            "manifest_max_zotero_version": "8.*",
+                            "manifest_json": manifest,
+                        }
+                    },
+                    "locales": [],
+                    "synced_at": "2026-04-11T01:00:00Z",
+                },
+            )
+
+            result = run_sync(
+                root=root,
+                plugins_ts_text="""
+                export const plugins = [
+                  { name: 'Localized', repo: 'demo/repo', releases: [{ tagName: 'latest' }] }
+                ]
+                """,
+                github_release_map={
+                    "demo/repo": [
+                        {
+                            "tag_name": "v1.2.3",
+                            "prerelease": False,
+                            "published_at": "2026-04-11T00:00:00Z",
+                            "assets": [
+                                {
+                                    "name": "localized.xpi",
+                                    "browser_download_url": "https://example.com/localized.xpi",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                github_repo_map={
+                    "demo/repo": {
+                        "description": "Repo description",
+                        "homepage": "https://repo.example.com",
+                        "html_url": "https://github.com/demo/repo",
+                    }
+                },
+            )
+
+            self.assertEqual(result.success_count, 1)
+            plugin_row = fetch_one(engine, "SELECT plugin_name FROM plugins")
+            locale_rows = fetch_all(
+                engine,
+                "SELECT locale, field, source, value FROM plugin_locales ORDER BY locale, field, source",
+            )
+            self.assertEqual(plugin_row, ("中文名称",))
+            self.assertIn(("en", "name", "manifest", "English Name"), locale_rows)
+            self.assertIn(("en", "description", "manifest", "English description"), locale_rows)
+            self.assertIn(("zh", "name", "manifest", "中文名称"), locale_rows)
+            self.assertIn(("zh", "description", "manifest", "中文描述"), locale_rows)
 
     def test_runs_end_to_end_with_stubbed_clients(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

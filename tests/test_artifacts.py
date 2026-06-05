@@ -128,6 +128,45 @@ class ArtifactsTest(unittest.TestCase):
             self.assertEqual(read_manifest_from_xpi(xpi_path)["version"], "1.2.3")
             self.assertEqual(calculate_md5(xpi_path), hashlib.md5(xpi_path.read_bytes()).hexdigest())
 
+    def test_resolves_webextension_localized_manifest_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            xpi_path = Path(tmp_dir) / "localized.xpi"
+            manifest = {
+                "name": "__MSG_name__",
+                "version": "1.2.3",
+                "description": "__MSG_description__",
+                "default_locale": "zh",
+                "applications": {
+                    "zotero": {
+                        "id": "localized@example.com",
+                        "strict_min_version": "7.0",
+                        "strict_max_version": "8.*",
+                    }
+                },
+            }
+            with zipfile.ZipFile(xpi_path, "w") as archive:
+                archive.writestr("manifest.json", json.dumps(manifest))
+                archive.writestr(
+                    "_locales/zh/messages.json",
+                    json.dumps({"name": {"message": "中文名称"}, "description": {"message": "中文描述"}}),
+                )
+                archive.writestr(
+                    "_locales/en/messages.json",
+                    json.dumps({"name": {"message": "English Name"}, "description": {"message": "English description"}}),
+                )
+
+            payload = read_manifest_from_xpi(xpi_path)
+
+            self.assertEqual(payload["name"], "中文名称")
+            self.assertEqual(payload["description"], "中文描述")
+            self.assertEqual(
+                payload["localized"],
+                [
+                    {"locale": "en", "name": "English Name", "description": "English description"},
+                    {"locale": "zh", "name": "中文名称", "description": "中文描述"},
+                ],
+            )
+
     def test_sanitizes_name_and_tag(self) -> None:
         self.assertEqual(sanitize_name("Better Notes / Test"), "Better_Notes_Test")
         self.assertEqual(sanitize_tag("release/v1.2.3 beta"), "release_v1.2.3_beta")

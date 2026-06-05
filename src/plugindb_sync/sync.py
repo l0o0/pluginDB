@@ -138,6 +138,7 @@ def _extract_manifest_fields(manifest: dict[str, Any]) -> dict[str, Any]:
         "homepage_url": manifest.get("homepage_url"),
         "author": manifest.get("author"),
         "update_url": zotero.get("update_url"),
+        "localized": manifest.get("localized") or [],
         "zotero": {
             "id": zotero.get("id"),
             "strict_min_version": zotero.get("strict_min_version"),
@@ -248,21 +249,22 @@ def _build_locales(manifest: dict[str, Any], repo_fields: dict[str, Any]) -> lis
 
     for localized_entry in manifest.get("localized", []):
         locale = str(localized_entry.get("locale") or "und").strip() or "und"
-        description = str(localized_entry.get("description") or "").strip()
-        if not description:
-            continue
-        key = (locale, "description", "manifest", description)
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append(
-            {
-                "locale": locale,
-                "field": "description",
-                "source": "manifest",
-                "value": description,
-            }
-        )
+        for field in ("name", "description"):
+            text_value = str(localized_entry.get(field) or "").strip()
+            if not text_value:
+                continue
+            key = (locale, field, "manifest", text_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(
+                {
+                    "locale": locale,
+                    "field": field,
+                    "source": "manifest",
+                    "value": text_value,
+                }
+            )
     return items
 
 
