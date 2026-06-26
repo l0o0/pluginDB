@@ -239,7 +239,7 @@ python3 scripts/sync_plugins.py --help
 如果需要把下载好的 XPI 发布到站点目录，可以在同步成功后执行发布脚本：
 
 ```cron
-0 */5 * * * cd /absolute/path/to/pluginDB && uv run python3 scripts/sync_plugins.py --root "$(pwd)" --mode sync && scripts/publish_addons.sh /var/www/downloads/addons
+0 */5 * * * cd /absolute/path/to/pluginDB && uv run python3 scripts/sync_plugins.py --root "$(pwd)" --mode sync && uv run python3 scripts/promote_staging.py --root "$(pwd)" && scripts/publish_addons.sh /var/www/downloads/addons
 ```
 
 `scripts/publish_addons.sh` 默认使用 `rsync -a --delete` 将 `data/xpi/` 镜像到目标目录。当前服务器的 FTP 目录是 `/var/www/downloads/addons`。

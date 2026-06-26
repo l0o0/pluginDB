@@ -234,3 +234,34 @@ def upsert_plugin_record(engine: Engine, record: dict[str, Any]) -> None:
                     synced_at=_parse_datetime(record["synced_at"]),
                 )
             )
+
+
+def _copy_table(connection: Any, source_table_name: str, target_table_name: str) -> int:
+    source = _quote_identifier(source_table_name)
+    target = _quote_identifier(target_table_name)
+    connection.execute(text(f"DELETE FROM {target}"))
+    result = connection.execute(text(f"INSERT INTO {target} SELECT * FROM {source}"))
+    return int(result.rowcount or 0)
+
+
+def promote_tables(
+    engine: Engine,
+    *,
+    plugins_table_name: str = "zotero_plugins",
+    releases_table_name: str = "zotero_plugin_releases",
+    locales_table_name: str = "zotero_plugin_locales",
+    staging_plugins_table_name: str = "zotero_plugin_staging_plugins",
+    staging_releases_table_name: str = "zotero_plugin_staging_releases",
+    staging_locales_table_name: str = "zotero_plugin_staging_locales",
+) -> dict[str, int]:
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM {_quote_identifier(locales_table_name)}"))
+        connection.execute(text(f"DELETE FROM {_quote_identifier(releases_table_name)}"))
+        plugin_count = _copy_table(connection, staging_plugins_table_name, plugins_table_name)
+        release_count = _copy_table(connection, staging_releases_table_name, releases_table_name)
+        locale_count = _copy_table(connection, staging_locales_table_name, locales_table_name)
+    return {
+        "plugins": plugin_count,
+        "releases": release_count,
+        "locales": locale_count,
+    }
