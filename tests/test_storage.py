@@ -2,10 +2,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from plugindb_sync.storage import create_engine, ensure_schema, fetch_all, fetch_one, upsert_plugin_record
+from sqlalchemy import ARRAY, Text
+from sqlalchemy.dialects import postgresql
+
+from plugindb_sync.storage import create_engine, ensure_schema, fetch_all, fetch_one, plugins_table, upsert_plugin_record
 
 
 class StorageTest(unittest.TestCase):
+    def test_binds_plugin_tags_as_text_array_for_postgres(self) -> None:
+        tags_type = plugins_table.c.tags.type.dialect_impl(postgresql.dialect())
+
+        self.assertIsInstance(tags_type, ARRAY)
+        self.assertIsInstance(tags_type.item_type, Text)
+
     def test_upserts_plugin_release_and_locales(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             db_path = Path(tmp_dir) / "plugins.sqlite3"

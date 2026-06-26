@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import ARRAY
 from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import DateTime
@@ -41,7 +42,7 @@ plugins_table = Table(
     Column("homepage_url", Text),
     Column("author", Text),
     Column("update_url", Text),
-    Column("tags", JSON, nullable=False, default=list),
+    Column("tags", JSON().with_variant(ARRAY(Text), "postgresql"), nullable=False, default=list),
     Column("github_stars", Integer, nullable=False, default=0),
     Column("download_count", Integer, nullable=False, default=0),
     Column("synced_at", DateTime(timezone=True), nullable=False),
