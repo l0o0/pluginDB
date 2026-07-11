@@ -565,7 +565,7 @@ class SyncTest(unittest.TestCase):
                 ),
             )
 
-    def test_skips_custom_link_when_cached_final_xpi_exists(self) -> None:
+    def test_redownloads_custom_link_even_when_cached_final_xpi_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             plugins_text = """
@@ -619,15 +619,117 @@ class SyncTest(unittest.TestCase):
                 second_result = run_sync(
                     root=root,
                     plugins_ts_text=plugins_text,
-                    downloaded_xpi_manifests={},
+                    downloaded_xpi_manifests=downloaded_xpi_manifests,
                     github_repo_map=github_repo_map,
                 )
 
             self.assertEqual(second_result.success_count, 1)
             output = stream.getvalue()
-            self.assertIn("action=skip", output)
+            self.assertIn("action=download", output)
             self.assertIn("release=custom@zotero-8", output)
             self.assertIn("target=data/xpi/ZoteroStyle/v5.8.6.xpi", output)
+
+    def test_redownloads_custom_link_when_fixed_url_content_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            plugins_text = """
+                export const plugins = [
+                  {
+                    repo: 'MuiseDestiny/zotero-gpt',
+                    releases: [
+                      {
+                        targetZoteroVersion: '8',
+                        tagName: 'custom',
+                        customLink: 'https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-gpt.xpi'
+                      },
+                      {
+                        targetZoteroVersion: '7',
+                        tagName: 'custom',
+                        customLink: 'https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-gpt.xpi'
+                      }
+                    ]
+                  }
+                ]
+                """
+            repo_map = {
+                "MuiseDestiny/zotero-gpt": {
+                    "description": "Repo description",
+                    "homepage": "https://repo.example.com",
+                    "html_url": "https://github.com/MuiseDestiny/zotero-gpt",
+                }
+            }
+            asset_url = "https://gitee.com/MuiseDestiny/plugins/raw/master/zotero-gpt.xpi"
+
+            first_result = run_sync(
+                root=root,
+                plugins_ts_text=plugins_text,
+                downloaded_xpi_manifests={
+                    asset_url: {
+                        "name": "Awesome GPT",
+                        "version": "3.1.2",
+                        "description": "desc",
+                        "homepage_url": "https://example.com",
+                        "author": "author",
+                        "applications": {
+                            "zotero": {
+                                "id": "zoterogpt@polygon.org",
+                                "strict_min_version": "6.999",
+                                "strict_max_version": "8.*",
+                            }
+                        },
+                    }
+                },
+                github_repo_map=repo_map,
+            )
+            self.assertEqual(first_result.success_count, 1)
+
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                second_result = run_sync(
+                    root=root,
+                    plugins_ts_text=plugins_text,
+                    downloaded_xpi_manifests={
+                        asset_url: {
+                            "name": "Awesome GPT",
+                            "version": "3.1.8",
+                            "description": "desc",
+                            "homepage_url": "https://example.com",
+                            "author": "author",
+                            "applications": {
+                                "zotero": {
+                                    "id": "zoterogpt@polygon.org",
+                                    "strict_min_version": "6.999",
+                                    "strict_max_version": "10.*",
+                                }
+                            },
+                        }
+                    },
+                    github_repo_map=repo_map,
+                )
+
+            self.assertEqual(second_result.success_count, 1)
+            output = stream.getvalue()
+            self.assertIn("action=download", output)
+            self.assertIn("release=custom@zotero-8", output)
+            self.assertIn("action=skip_duplicate", output)
+            self.assertIn("release=custom@zotero-7", output)
+
+            engine = create_engine(f"sqlite+pysqlite:///{root / 'data' / 'db' / 'plugins.sqlite3'}")
+            rows = fetch_all(
+                engine,
+                """
+                SELECT release_key, xpi_path, manifest_version, manifest_max_zotero_version
+                FROM plugin_releases
+                ORDER BY release_key
+                """,
+            )
+            self.assertEqual(
+                rows,
+                [
+                    ("custom@zotero-7", "data/xpi/zotero-gpt/v3.1.8.xpi", "3.1.8", "10.*"),
+                    ("custom@zotero-8", "data/xpi/zotero-gpt/v3.1.8.xpi", "3.1.8", "10.*"),
+                ],
+            )
 
     def test_reuses_duplicate_release_url_within_same_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

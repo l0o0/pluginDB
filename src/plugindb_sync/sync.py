@@ -360,7 +360,7 @@ def run_sync(
                             provisional_target_path,
                             cached_release,
                             str(release["tag_name"]),
-                            bool(release_ref.custom_link),
+                            False,
                         )
                         is_duplicate_url = asset_url in processed_xpi_urls
                         if is_duplicate_url:
