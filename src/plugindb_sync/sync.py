@@ -515,7 +515,7 @@ def run_sync(
                                 )
                                 target_path = existing_target_path
                                 manifest_raw = read_manifest_from_xpi(target_path)
-                                md5 = str((cached_release or {}).get("md5") or "")
+                                md5 = str((cached_release or {}).get("md5") or calculate_md5(target_path))
                             else:
                                 manifest_raw, md5 = _resolve_xpi(
                                     asset_url,

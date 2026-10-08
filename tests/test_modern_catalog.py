@@ -172,6 +172,18 @@ class ModernCatalogTest(unittest.TestCase):
         from plugindb_sync.artifacts import read_manifest_from_xpi
         self.assertEqual(read_manifest_from_xpi(path)["description"], changed["description"])
 
+    def test_cached_package_retains_checksum_when_database_is_rebuilt(self):
+        latest = release("v2")
+        manifests = {latest["assets"][0]["browser_download_url"]: manifest()}
+        self.assertEqual(self.sync(catalog(), {"demo/plugin": [latest]}, manifests).success_count, 1)
+        checksum = self.rows("SELECT md5 FROM plugin_releases")[0][0]
+        with closing(sqlite3.connect(self.root / 'data/db/plugins.sqlite3')) as connection:
+            for table in ['plugin_locales', 'plugin_releases', 'plugins']:
+                connection.execute('DELETE FROM ' + table)
+            connection.commit()
+        self.assertEqual(self.sync(catalog(), {"demo/plugin": [latest]}, {}).success_count, 1)
+        self.assertEqual(self.rows("SELECT md5 FROM plugin_releases"), [(checksum,)])
+
     def test_default_source_loads_both_catalogs_and_deduplicates_aliases(self):
         active = catalog(fields="aliases: ['old/plugin'],")
         legacy = catalog(repo="old/plugin", export="deprecatedPlugins")
