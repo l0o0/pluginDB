@@ -4,7 +4,9 @@
 
 ## 背景
 
-这个项目面向 Zotero 插件索引场景，以上游 `zotero-chinese/zotero-plugins` 的 `plugins.ts` 为插件清单来源。同步任务会按插件定义抓取 GitHub release，区分正式版和预发布版，下载最新 `.xpi`，计算 `md5`，解析插件兼容信息，并把结果落到本地 JSON 和数据库中。
+这个项目面向 Zotero 插件索引场景，默认合并上游 `zotero-chinese/zotero-plugins` 的 `src/plugins.ts` 和 `src/deprecated.ts`，覆盖活跃及旧版插件。同步任务会按插件定义抓取 GitHub release，区分正式版和预发布版，下载 `.xpi` / 插件 ZIP，计算 `md5`，解析插件兼容信息，并把结果落到本地 JSON 和数据库中。
+
+2026-10 的新版清单使用固定历史 tag 配合 `discoverReleases: true`。同步器会保留这些历史版本，并从最近的发行版列表中发现最新正式版；按 `assetName` 选择指定附件，使用仓库别名合并重复来源。尚无正式发行版且没有历史选择器的来源记为 `pending_count`，不会导致整批失败；网络错误和历史版本抓取失败仍计入 `failure_count`。
 
 当前实现特点：
 
@@ -115,7 +117,9 @@ python3 scripts/sync_plugins.py \
   --plugins-file "$(pwd)/plugins.ts"
 ```
 
-`sync` 模式只处理动态 release，例如 `latest`、`pre`、`custom`，适合定时任务。
+新版清单在 `sync` 模式下同时处理历史版本与自动发现的最新正式版，首次即可补齐新插件，后续复用已下载的历史 XPI。没有 `discoverReleases` 标记的旧清单仍只处理 `latest`、`pre`、`custom`；需要补齐旧清单历史版本时使用 `init`。
+
+指定 `--plugins-file` 时自动读取同目录的 `deprecated.ts`（如果存在）；也可用 `--deprecated-file PATH` 明确指定。自定义 `--plugins-url` 时，可用 `--deprecated-url URL` 指定对应旧版清单。`--active-only` 只处理活跃清单。
 
 ### 4. 指定数据库连接
 
@@ -138,7 +142,7 @@ python3 scripts/sync_plugins.py \
 
 ### 5. 使用 GitHub Token
 
-GitHub API 或下载资源时如果遇到限流，可以传 token：
+完整清单包含 300 多个仓库，应设置 `GITHUB_TOKEN` 环境变量以避免匿名 GitHub API 限流；也可通过 `--github-token` 显式传入：
 
 ```bash
 source ~/myenv/bin/activate
@@ -153,6 +157,8 @@ python3 scripts/sync_plugins.py \
 
 - `data/cache/plugins.ts`
   缓存本次实际使用的插件清单
+- `data/cache/deprecated.ts`
+  缓存本次实际使用的旧版插件清单
 - `data/json/{plugin_id}.json`
   插件规范化 JSON
 - `data/xpi/{plugin_name}/{tag}.xpi`
@@ -170,12 +176,17 @@ action=skip_duplicate repo=MuiseDestiny/ZoteroStyle release=custom@zotero-9 url=
 
 XPI 文件命名规则：
 
+- 新版清单按 `data/xpi/{owner}/{repo}/{tag}/{assetName}` 存放，隔离同名仓库和同一 tag 的不同附件；自定义下载的目录 tag 使用 manifest 版本。数据库中的 `xpi_path` 指向实际文件，发布脚本可照常镜像整个目录。
+- 以下扁平命名规则保留给未使用新格式的旧清单：
 - 如果 tag 已经以 `v` 开头，不重复加前缀
 - 例如 `v1.2.3` 保存为 `v1.2.3.xpi`
 - 例如 `1.2.3` 保存为 `v1.2.3.xpi`
 - `customLink` 下载完成后会按解析出的插件版本保存，例如 `v5.8.6.xpi`
 - 如果数据库里已经记录了对应 release 且本地 XPI 文件存在，则会直接跳过下载，也不会重复计算 `md5`
 - 同一次运行内，如果多个 release 指向同一个 XPI URL，只会下载和解析一次，后续 release 会复用第一次的结果
+- 自定义 URL 每轮刷新，即使 manifest 版本未变化也会更新文件内容。
+
+插件标签以 JSON 数组写入 SQLite 的 `plugins.tags`，Soil 导入器可以直接读取。旧数据库首次运行时自动新增该列并保留现有数据；单个插件抓取失败时保留其上次数据库记录。
 
 XPI 元数据解析规则：
 

@@ -13,6 +13,7 @@ from sqlalchemy import Text
 from sqlalchemy import create_engine as sa_create_engine
 from sqlalchemy import delete
 from sqlalchemy import insert
+from sqlalchemy import inspect
 from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy import update
@@ -32,6 +33,7 @@ plugins_table = Table(
     Column("homepage_url", Text),
     Column("author", Text),
     Column("update_url", Text),
+    Column("tags", Text, nullable=False, server_default="[]"),
     Column("synced_at", Text, nullable=False),
 )
 
@@ -74,6 +76,11 @@ def create_engine(database_url: str) -> Engine:
 
 def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
+    # Existing SQLite/PostgreSQL catalogs predate source tags. Preserve their data.
+    with engine.begin() as connection:
+        columns = {column["name"] for column in inspect(connection).get_columns("plugins")}
+        if "tags" not in columns:
+            connection.execute(text("ALTER TABLE plugins ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"))
 
 
 def fetch_one(engine: Engine, sql: str) -> tuple[Any, ...] | None:
@@ -124,6 +131,7 @@ def _plugin_values(record: dict[str, Any]) -> dict[str, Any]:
         "homepage_url": record.get("homepage_url"),
         "author": record.get("author"),
         "update_url": record.get("update_url"),
+        "tags": json.dumps(record.get("tags", []), ensure_ascii=False),
         "synced_at": record["synced_at"],
     }
 

@@ -11,6 +11,10 @@ DEFAULT_TIMEOUT = 30
 GITHUB_BASE_URL = "https://github.com"
 
 
+class NoReleaseError(ValueError):
+    """A valid release list has no matching published release."""
+
+
 def _request_json(url: str, github_token: str | None = None) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -121,6 +125,7 @@ def fetch_latest_release_from_github_web(repo: str) -> dict[str, Any]:
 
 
 def pick_release_for_tag(releases: list[dict[str, Any]], tag_name: str) -> dict[str, Any]:
+    releases = [item for item in releases if not item.get("draft")]
     if tag_name == "latest":
         candidates = [item for item in releases if not bool(item.get("prerelease"))]
     elif tag_name == "pre":
@@ -129,16 +134,25 @@ def pick_release_for_tag(releases: list[dict[str, Any]], tag_name: str) -> dict[
         candidates = [item for item in releases if item.get("tag_name") == tag_name]
 
     if not candidates:
-        raise ValueError(f"No release found for {tag_name}")
+        raise NoReleaseError(f"No release found for {tag_name}")
 
     candidates.sort(key=lambda item: str(item.get("published_at") or item.get("created_at") or ""), reverse=True)
     return candidates[0]
 
 
-def pick_xpi_asset(release: dict[str, Any]) -> dict[str, Any]:
+def pick_xpi_asset(
+    release: dict[str, Any], asset_name: str | None = None, *, allow_fallback: bool = False,
+) -> dict[str, Any]:
     assets = release.get("assets")
     if not isinstance(assets, list):
         raise ValueError("Release assets missing")
+
+    if asset_name:
+        for asset in assets:
+            if isinstance(asset, dict) and asset.get("name") == asset_name:
+                return asset
+        if not allow_fallback:
+            raise ValueError(f"Asset {asset_name!r} missing from release {release.get('tag_name')}")
 
     candidates = []
     for asset in assets:
@@ -146,9 +160,9 @@ def pick_xpi_asset(release: dict[str, Any]) -> dict[str, Any]:
             continue
         name = str(asset.get("name") or "")
         lowered = name.lower()
-        if not lowered.endswith(".xpi"):
+        if not lowered.endswith((".xpi", ".zip")) and asset.get("content_type") != "application/x-xpinstall":
             continue
-        penalty = 0
+        penalty = 0 if lowered.endswith(".xpi") else 10
         for marker in ("source", "debug", "symbols"):
             if marker in lowered:
                 penalty += 1

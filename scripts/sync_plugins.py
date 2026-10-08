@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -22,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         choices=("init", "sync"),
         default="sync",
-        help="init downloads all declared releases; sync only checks dynamic releases like latest/pre/custom",
+        help="sync discovers new releases and retains historical selectors in modern catalogs; init also includes fixed tags in legacy catalogs",
     )
     parser.add_argument(
         "--database-url",
@@ -41,9 +42,21 @@ def parse_args() -> argparse.Namespace:
         help="Raw plugins.ts source URL",
     )
     parser.add_argument(
+        "--deprecated-file", type=Path, default=None,
+        help="Local deprecated.ts; defaults to a sibling of --plugins-file when present",
+    )
+    parser.add_argument(
+        "--deprecated-url", default=None,
+        help="Legacy catalog URL; the default upstream includes deprecated.ts automatically",
+    )
+    parser.add_argument(
+        "--active-only", action="store_true",
+        help="Exclude the legacy plugin catalog",
+    )
+    parser.add_argument(
         "--github-token",
-        default=None,
-        help="Optional GitHub token used for API and asset download requests",
+        default=os.environ.get("GITHUB_TOKEN"),
+        help="GitHub token used for API and asset download requests; defaults to GITHUB_TOKEN",
     )
     return parser.parse_args()
 
@@ -57,10 +70,13 @@ def main() -> int:
         plugins_ts_path=args.plugins_file,
         github_token=args.github_token,
         plugins_url=args.plugins_url,
+        deprecated_ts_path=args.deprecated_file,
+        deprecated_url=args.deprecated_url,
+        include_deprecated=not args.active_only,
     )
     print(
         f"plugin_count={result.plugin_count} success_count={result.success_count} "
-        f"failure_count={result.failure_count}"
+        f"failure_count={result.failure_count} pending_count={result.pending_count}"
     )
     for failure in result.failures:
         print(f"ERROR {failure}")

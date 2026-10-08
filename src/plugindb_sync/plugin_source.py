@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 
@@ -9,6 +9,7 @@ class ReleaseRef:
     tag_name: str
     custom_link: str | None = None
     target_zotero_version: str | None = None
+    asset_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -16,9 +17,26 @@ class PluginRef:
     name: str
     repo: str
     releases: list[ReleaseRef]
+    discover_releases: bool = False
+    tags: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
 
 
-_FIELD_PATTERN = r"{field}\s*:\s*(['\"])(.*?)\1"
+_FIELD_PATTERN = r"\b{field}\s*:\s*(['\"])(.*?)\1"
+
+
+def _strip_comments(text: str) -> str:
+    # Preserve quoted URLs and strings while removing comments containing braces.
+    pattern = r'''('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")|//[^\n]*|/\*[\s\S]*?\*/'''
+    return re.sub(pattern, lambda match: match.group(1) or " ", text)
+
+
+def _string_array(text: str, field_name: str) -> list[str]:
+    match = re.search(rf"\b{re.escape(field_name)}\s*:\s*\[", text)
+    if not match:
+        return []
+    block, _ = _extract_bracketed(text, match.end() - 1, "[", "]")
+    return [match.group(2) for match in re.finditer(r'''(['"])(.*?)\1''', block)]
 
 
 def _extract_bracketed(text: str, start_index: int, open_char: str, close_char: str) -> tuple[str, int]:
@@ -85,13 +103,17 @@ def _parse_release_refs(plugin_block: str) -> list[ReleaseRef]:
                     tag_name=tag_name,
                     custom_link=_match_field(release_block, "customLink"),
                     target_zotero_version=_match_field(release_block, "targetZoteroVersion"),
+                    asset_name=_match_field(release_block, "assetName"),
                 )
             )
-    return refs or [ReleaseRef(tag_name="latest")]
+    if refs or re.search(r"\bdiscoverReleases\s*:\s*true\b", plugin_block):
+        return refs
+    return [ReleaseRef(tag_name="latest")]
 
 
-def parse_plugins_ts(text: str) -> list[PluginRef]:
-    export_match = re.search(r"export\s+const\s+plugins\b[^=]*=\s*\[", text, re.DOTALL)
+def parse_plugins_ts(text: str, export_name: str = "plugins") -> list[PluginRef]:
+    text = _strip_comments(text)
+    export_match = re.search(rf"export\s+const\s+{re.escape(export_name)}\b[^=]*=\s*\[", text, re.DOTALL)
     if not export_match:
         return []
     array_start = export_match.end() - 1
@@ -108,6 +130,9 @@ def parse_plugins_ts(text: str) -> list[PluginRef]:
                 name=name,
                 repo=repo,
                 releases=_parse_release_refs(plugin_block),
+                discover_releases=bool(re.search(r"\bdiscoverReleases\s*:\s*true\b", plugin_block)),
+                tags=_string_array(plugin_block, "tags"),
+                aliases=_string_array(plugin_block, "aliases"),
             )
         )
     return plugins
