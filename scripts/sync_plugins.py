@@ -13,7 +13,9 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from plugindb_sync.sync import DEFAULT_PLUGINS_TS_URL, run_sync
+from plugindb_sync.env_loader import load_dotenv
+
+DEFAULT_PLUGINS_TS_URL = "https://raw.githubusercontent.com/zotero-chinese/zotero-plugins/main/src/plugins.ts"
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,12 +65,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    load_dotenv(args.root / ".env")
+
+    from plugindb_sync.sync import run_sync
+
     result = run_sync(
         root=args.root,
         mode=args.mode,
-        database_url=args.database_url,
+        database_url=args.database_url or os.getenv("PLUGINDB_DATABASE_URL"),
         plugins_ts_path=args.plugins_file,
-        github_token=args.github_token,
+        github_token=args.github_token or os.getenv("PLUGINDB_GITHUB_TOKEN") or os.getenv("GITHUB_TOKEN"),
         plugins_url=args.plugins_url,
         deprecated_ts_path=args.deprecated_file,
         deprecated_url=args.deprecated_url,

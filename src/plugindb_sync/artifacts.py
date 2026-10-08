@@ -15,6 +15,8 @@ CHUNK_SIZE = 1024 * 1024
 EM_NS = "http://www.mozilla.org/2004/em-rdf#"
 RDF_NAMESPACES = {"em": EM_NS, "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"}
 RDF_NS = RDF_NAMESPACES["rdf"]
+MSG_PATTERN = re.compile(r"^__MSG_([A-Za-z0-9_@.-]+)__$")
+
 
 
 def sanitize_name(value: str) -> str:
@@ -47,6 +49,85 @@ def _read_archive_text(archive: zipfile.ZipFile, preferred_name: str) -> str | N
         target_name = matches[0]
     with archive.open(target_name) as handle:
         return handle.read().decode("utf-8")
+
+
+def _message_key(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = MSG_PATTERN.match(value.strip())
+    return match.group(1) if match else None
+
+
+def _read_locale_messages(archive: zipfile.ZipFile) -> dict[str, dict[str, str]]:
+    locales: dict[str, dict[str, str]] = {}
+    for name in sorted(archive.namelist()):
+        parts = name.split("/")
+        if len(parts) < 3 or parts[-3] != "_locales" or parts[-1] != "messages.json":
+            continue
+        locale = parts[-2]
+        try:
+            payload = json.loads(archive.read(name).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        messages: dict[str, str] = {}
+        for key, item in payload.items():
+            if not isinstance(key, str) or not isinstance(item, dict):
+                continue
+            message = item.get("message")
+            if isinstance(message, str) and message.strip():
+                messages[key] = message.strip()
+        if messages:
+            locales[locale] = messages
+    return locales
+
+
+def _resolve_message(value: Any, messages: dict[str, str]) -> Any:
+    key = _message_key(value)
+    if key is None:
+        return value
+    return messages.get(key, value)
+
+
+def _preferred_locale_messages(
+    locale_messages: dict[str, dict[str, str]],
+    default_locale: Any,
+) -> dict[str, str]:
+    preferred_locales = []
+    if isinstance(default_locale, str) and default_locale.strip():
+        preferred_locales.append(default_locale.strip())
+    preferred_locales.extend(["en_US", "en", "zh_CN", "zh"])
+    for locale in preferred_locales:
+        messages = locale_messages.get(locale)
+        if messages:
+            return messages
+    return next(iter(locale_messages.values()), {})
+
+
+def _resolve_manifest_locales(manifest: dict[str, Any], archive: zipfile.ZipFile) -> dict[str, Any]:
+    locale_messages = _read_locale_messages(archive)
+    if not locale_messages:
+        return manifest
+
+    resolved = dict(manifest)
+    default_messages = _preferred_locale_messages(locale_messages, manifest.get("default_locale"))
+    for field in ("name", "description"):
+        resolved[field] = _resolve_message(resolved.get(field), default_messages)
+
+    localized: list[dict[str, Any]] = []
+    for locale, messages in sorted(locale_messages.items()):
+        entry = {"locale": locale}
+        for field in ("name", "description"):
+            value = _resolve_message(manifest.get(field), messages)
+            if isinstance(value, str) and value.strip() and _message_key(value) is None:
+                entry[field] = value.strip()
+        if len(entry) > 1:
+            localized.append(entry)
+    if localized:
+        existing = [item for item in resolved.get("localized", []) if isinstance(item, dict)]
+        resolved["localized"] = existing + localized
+    return resolved
 
 
 def _find_child_text(element: ET.Element, tag: str) -> str | None:
@@ -167,7 +248,10 @@ def read_manifest_from_xpi(path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(path) as archive:
         manifest_text = _read_archive_text(archive, "manifest.json")
         if manifest_text is not None:
-            return json.loads(manifest_text)
+            manifest = json.loads(manifest_text)
+            if isinstance(manifest, dict):
+                return _resolve_manifest_locales(manifest, archive)
+            return manifest
 
         install_rdf = _read_archive_text(archive, "install.rdf")
         if install_rdf is not None:

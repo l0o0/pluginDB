@@ -119,6 +119,15 @@ def _build_source_url(repo: str) -> str:
     return f"https://github.com/{repo}"
 
 
+def _to_int(value: Any, default: int = 0) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _build_xpi_filename(tag: str) -> str:
     normalized = sanitize_tag(tag)
     if normalized.lower().startswith("v"):
@@ -200,6 +209,7 @@ def _extract_manifest_fields(manifest: dict[str, Any]) -> dict[str, Any]:
         "homepage_url": manifest.get("homepage_url"),
         "author": manifest.get("author"),
         "update_url": zotero.get("update_url"),
+        "localized": manifest.get("localized") or [],
         "zotero": {
             "id": zotero.get("id"),
             "strict_min_version": zotero.get("strict_min_version"),
@@ -214,6 +224,7 @@ def _extract_repo_fields(repo_metadata: dict[str, Any] | None, repo: str) -> dic
         "description": payload.get("description"),
         "homepage_url": payload.get("homepage") or payload.get("html_url") or _build_source_url(repo),
         "source_url": payload.get("html_url") or _build_source_url(repo),
+        "github_stars": _to_int(payload.get("stargazers_count")),
     }
 
 
@@ -245,6 +256,7 @@ def _resolve_release(
                 {
                     "name": asset_name,
                     "browser_download_url": release_ref.custom_link,
+                    "download_count": 0,
                 }
             ],
         }
@@ -310,21 +322,22 @@ def _build_locales(manifest: dict[str, Any], repo_fields: dict[str, Any]) -> lis
 
     for localized_entry in manifest.get("localized", []):
         locale = str(localized_entry.get("locale") or "und").strip() or "und"
-        description = str(localized_entry.get("description") or "").strip()
-        if not description:
-            continue
-        key = (locale, "description", "manifest", description)
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append(
-            {
-                "locale": locale,
-                "field": "description",
-                "source": "manifest",
-                "value": description,
-            }
-        )
+        for field in ("name", "description"):
+            text_value = str(localized_entry.get(field) or "").strip()
+            if not text_value:
+                continue
+            key = (locale, field, "manifest", text_value)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(
+                {
+                    "locale": locale,
+                    "field": field,
+                    "source": "manifest",
+                    "value": text_value,
+                }
+            )
     return items
 
 
@@ -354,10 +367,16 @@ def _build_plugin_record(
             "asset_url": item["asset_url"],
             "xpi_path": item["xpi_path"],
             "md5": item["md5"],
+            "download_count": item["download_count"],
             "manifest_version": item["manifest_version"],
             "manifest_min_zotero_version": item["manifest_min_zotero_version"],
             "manifest_max_zotero_version": item["manifest_max_zotero_version"],
         }
+
+    unique_download_counts = {
+        item["asset_url"]: _to_int(item.get("download_count"))
+        for item in release_payloads.values()
+    }
 
     return {
         "id": plugin_id,
@@ -369,6 +388,8 @@ def _build_plugin_record(
         "author": manifest_payload.get("author"),
         "update_url": manifest_payload.get("update_url"),
         "tags": plugin.tags,
+        "github_stars": repo_fields.get("github_stars") or 0,
+        "download_count": sum(unique_download_counts.values()),
         "releases": json_releases,
         "locales": _build_locales(manifest_payload, repo_fields),
         "synced_at": synced_at,
@@ -547,6 +568,7 @@ def run_sync(
                             "asset_url": str(asset["browser_download_url"]),
                             "xpi_path": _relative_to_root(target_path, project_root),
                             "md5": md5,
+                            "download_count": _to_int(asset.get("download_count")),
                             "manifest_version": str(manifest.get("version") or ""),
                             "manifest_min_zotero_version": manifest["zotero"].get("strict_min_version"),
                             "manifest_max_zotero_version": manifest["zotero"].get("strict_max_version"),

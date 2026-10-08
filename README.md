@@ -16,8 +16,8 @@
 - 支持旧版插件包中的 `install.rdf`，当 `manifest.json` 不存在时自动回退解析
 - 支持 `init` / `sync` 两种运行模式
 - 支持通过 SQLAlchemy 切换数据库连接
-- `plugins` 主表只保留插件级元数据
-- `plugin_releases` 表保存版本、兼容范围、xpi 路径、md5 等 release 信息
+- `plugins` 主表只保留插件级元数据，并保存人工归类 tags、GitHub stars、插件聚合下载量
+- `plugin_releases` 表保存版本、兼容范围、xpi 路径、md5、release asset 下载量等 release 信息
 - `plugin_locales` 表保存多语言或多来源的描述信息
 
 ## 数据模型
@@ -25,9 +25,9 @@
 当前默认三张表：
 
 - `plugins`
-  保存插件级元数据，例如 `plugin_name`、`source_repo`、`homepage_url`、`author`
+  保存插件级元数据，例如 `plugin_name`、`source_repo`、`homepage_url`、`author`、`tags`、`github_stars`、`download_count`
 - `plugin_releases`
-  保存 release 级元数据，例如 `tag`、`prerelease`、`asset_url`、`xpi_path`、`md5`、`manifest_version`
+  保存 release 级元数据，例如 `tag`、`prerelease`、`asset_url`、`xpi_path`、`md5`、`download_count`、`manifest_version`
 - `plugin_locales`
   保存插件描述类文本，目前主要是 `description`
   `source` 目前区分 `manifest` 和 `github_repo`
@@ -142,7 +142,7 @@ python3 scripts/sync_plugins.py \
 
 ### 5. 使用 GitHub Token
 
-完整清单包含 300 多个仓库，应设置 `GITHUB_TOKEN` 环境变量以避免匿名 GitHub API 限流；也可通过 `--github-token` 显式传入：
+完整清单包含 300 多个仓库，应设置 GitHub token 以避免匿名 API 限流。可在根目录 `.env` 中配置 `PLUGINDB_GITHUB_TOKEN` 或 `GITHUB_TOKEN`，也可通过 `--github-token` 显式传入：
 
 ```bash
 source ~/myenv/bin/activate
@@ -250,7 +250,7 @@ python3 scripts/sync_plugins.py --help
 如果需要把下载好的 XPI 发布到站点目录，可以在同步成功后执行发布脚本：
 
 ```cron
-0 */5 * * * cd /absolute/path/to/pluginDB && uv run python3 scripts/sync_plugins.py --root "$(pwd)" --mode sync && scripts/publish_addons.sh /var/www/downloads/addons
+0 */5 * * * cd /absolute/path/to/pluginDB && uv run python3 scripts/sync_plugins.py --root "$(pwd)" --mode sync && uv run python3 scripts/promote_staging.py --root "$(pwd)" && scripts/publish_addons.sh /var/www/downloads/addons
 ```
 
 `scripts/publish_addons.sh` 默认使用 `rsync -a --delete` 将 `data/xpi/` 镜像到目标目录。当前服务器的 FTP 目录是 `/var/www/downloads/addons`。

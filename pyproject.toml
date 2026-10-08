@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Sync Zotero plugin release metadata into local JSON and SQLite"
 requires-python = ">=3.13"
 dependencies = [
-    "SQLAlchemy>=2.0,<2.1",
+    "psycopg[binary]>=3.2,<4",
+    "sqlalchemy>=2.0,<2.1",
 ]
 
 [tool.setuptools]

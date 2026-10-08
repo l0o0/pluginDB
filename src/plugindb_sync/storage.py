@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-import json
+import os
+from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import ARRAY
+from sqlalchemy import Boolean
 from sqlalchemy import Column
+from sqlalchemy import DateTime
 from sqlalchemy import Engine
 from sqlalchemy import Integer
+from sqlalchemy import JSON
 from sqlalchemy import MetaData
 from sqlalchemy import String
 from sqlalchemy import Table
@@ -22,8 +27,12 @@ from sqlalchemy.pool import NullPool
 
 metadata = MetaData()
 
+PLUGINS_TABLE_NAME = os.getenv("PLUGINDB_PLUGINS_TABLE", "plugins")
+PLUGIN_RELEASES_TABLE_NAME = os.getenv("PLUGINDB_PLUGIN_RELEASES_TABLE", "plugin_releases")
+PLUGIN_LOCALES_TABLE_NAME = os.getenv("PLUGINDB_PLUGIN_LOCALES_TABLE", "plugin_locales")
+
 plugins_table = Table(
-    "plugins",
+    PLUGINS_TABLE_NAME,
     metadata,
     Column("id", String, primary_key=True),
     Column("plugin_name", Text, nullable=False),
@@ -33,38 +42,41 @@ plugins_table = Table(
     Column("homepage_url", Text),
     Column("author", Text),
     Column("update_url", Text),
-    Column("tags", Text, nullable=False, server_default="[]"),
-    Column("synced_at", Text, nullable=False),
+    Column("tags", JSON().with_variant(ARRAY(Text), "postgresql"), nullable=False, default=list),
+    Column("github_stars", Integer, nullable=False, default=0),
+    Column("download_count", Integer, nullable=False, default=0),
+    Column("synced_at", DateTime(timezone=True), nullable=False),
 )
 
 plugin_releases_table = Table(
-    "plugin_releases",
+    PLUGIN_RELEASES_TABLE_NAME,
     metadata,
     Column("plugin_id", String, primary_key=True),
     Column("release_key", String, primary_key=True),
     Column("tag", Text, nullable=False),
-    Column("prerelease", Integer, nullable=False),
-    Column("published_at", Text),
+    Column("prerelease", Boolean, nullable=False),
+    Column("published_at", DateTime(timezone=True)),
     Column("asset_name", Text, nullable=False),
     Column("asset_url", Text, nullable=False),
     Column("xpi_path", Text, nullable=False),
     Column("md5", String, nullable=False),
+    Column("download_count", Integer, nullable=False, default=0),
     Column("manifest_version", Text, nullable=False),
     Column("manifest_min_zotero_version", Text),
     Column("manifest_max_zotero_version", Text),
-    Column("manifest_json", Text, nullable=False),
-    Column("synced_at", Text, nullable=False),
+    Column("manifest_json", JSON, nullable=False),
+    Column("synced_at", DateTime(timezone=True), nullable=False),
 )
 
 plugin_locales_table = Table(
-    "plugin_locales",
+    PLUGIN_LOCALES_TABLE_NAME,
     metadata,
     Column("plugin_id", String, primary_key=True),
     Column("locale", String, primary_key=True),
     Column("field", String, primary_key=True),
     Column("source", String, primary_key=True),
     Column("value", Text, nullable=False),
-    Column("synced_at", Text, nullable=False),
+    Column("synced_at", DateTime(timezone=True), nullable=False),
 )
 
 
@@ -74,13 +86,39 @@ def create_engine(database_url: str) -> Engine:
     return sa_create_engine(database_url, future=True)
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _add_column_if_missing(engine: Engine, table_name: str, column_name: str, column_sql: str) -> None:
+    with engine.begin() as connection:
+        columns = {column["name"] for column in inspect(connection).get_columns(table_name)}
+        if column_name in columns:
+            return
+        connection.execute(
+            text(f"ALTER TABLE {_quote_identifier(table_name)} ADD COLUMN {_quote_identifier(column_name)} {column_sql}")
+        )
+
+
 def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
-    # Existing SQLite/PostgreSQL catalogs predate source tags. Preserve their data.
-    with engine.begin() as connection:
-        columns = {column["name"] for column in inspect(connection).get_columns("plugins")}
-        if "tags" not in columns:
-            connection.execute(text("ALTER TABLE plugins ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"))
+    tags_sql = "TEXT[] NOT NULL DEFAULT '{}'" if engine.dialect.name == "postgresql" else "TEXT NOT NULL DEFAULT '[]'"
+    _add_column_if_missing(engine, PLUGINS_TABLE_NAME, "tags", tags_sql)
+    _add_column_if_missing(engine, PLUGINS_TABLE_NAME, "github_stars", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(engine, PLUGINS_TABLE_NAME, "download_count", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(engine, PLUGIN_RELEASES_TABLE_NAME, "download_count", "INTEGER NOT NULL DEFAULT 0")
 
 
 def fetch_one(engine: Engine, sql: str) -> tuple[Any, ...] | None:
@@ -131,8 +169,10 @@ def _plugin_values(record: dict[str, Any]) -> dict[str, Any]:
         "homepage_url": record.get("homepage_url"),
         "author": record.get("author"),
         "update_url": record.get("update_url"),
-        "tags": json.dumps(record.get("tags", []), ensure_ascii=False),
-        "synced_at": record["synced_at"],
+        "tags": record.get("tags") or [],
+        "github_stars": int(record.get("github_stars") or 0),
+        "download_count": int(record.get("download_count") or 0),
+        "synced_at": _parse_datetime(record["synced_at"]),
     }
 
 
@@ -166,18 +206,18 @@ def upsert_plugin_record(engine: Engine, record: dict[str, Any]) -> None:
                     plugin_id=record["id"],
                     release_key=release_key,
                     tag=release["tag"],
-                    prerelease=1 if release.get("prerelease") else 0,
-                    published_at=release.get("published_at"),
+                    prerelease=bool(release.get("prerelease")),
+                    published_at=_parse_datetime(release.get("published_at")),
                     asset_name=release["asset_name"],
                     asset_url=release["asset_url"],
                     xpi_path=release["xpi_path"],
                     md5=release["md5"],
+                    download_count=int(release.get("download_count") or 0),
                     manifest_version=release["manifest_version"],
                     manifest_min_zotero_version=release.get("manifest_min_zotero_version"),
                     manifest_max_zotero_version=release.get("manifest_max_zotero_version"),
-                    manifest_json=release.get("manifest_json_text")
-                    or json.dumps(release.get("manifest_json") or {}, ensure_ascii=False, sort_keys=True),
-                    synced_at=record["synced_at"],
+                    manifest_json=release.get("manifest_json") or {},
+                    synced_at=_parse_datetime(record["synced_at"]),
                 )
             )
 
@@ -192,6 +232,37 @@ def upsert_plugin_record(engine: Engine, record: dict[str, Any]) -> None:
                     field=locale_entry["field"],
                     source=locale_entry["source"],
                     value=locale_entry["value"],
-                    synced_at=record["synced_at"],
+                    synced_at=_parse_datetime(record["synced_at"]),
                 )
             )
+
+
+def _copy_table(connection: Any, source_table_name: str, target_table_name: str) -> int:
+    source = _quote_identifier(source_table_name)
+    target = _quote_identifier(target_table_name)
+    connection.execute(text(f"DELETE FROM {target}"))
+    result = connection.execute(text(f"INSERT INTO {target} SELECT * FROM {source}"))
+    return int(result.rowcount or 0)
+
+
+def promote_tables(
+    engine: Engine,
+    *,
+    plugins_table_name: str = "zotero_plugins",
+    releases_table_name: str = "zotero_plugin_releases",
+    locales_table_name: str = "zotero_plugin_locales",
+    staging_plugins_table_name: str = "zotero_plugin_staging_plugins",
+    staging_releases_table_name: str = "zotero_plugin_staging_releases",
+    staging_locales_table_name: str = "zotero_plugin_staging_locales",
+) -> dict[str, int]:
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM {_quote_identifier(locales_table_name)}"))
+        connection.execute(text(f"DELETE FROM {_quote_identifier(releases_table_name)}"))
+        plugin_count = _copy_table(connection, staging_plugins_table_name, plugins_table_name)
+        release_count = _copy_table(connection, staging_releases_table_name, releases_table_name)
+        locale_count = _copy_table(connection, staging_locales_table_name, locales_table_name)
+    return {
+        "plugins": plugin_count,
+        "releases": release_count,
+        "locales": locale_count,
+    }
