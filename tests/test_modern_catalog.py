@@ -184,6 +184,21 @@ class ModernCatalogTest(unittest.TestCase):
         self.assertEqual(self.sync(catalog(), {"demo/plugin": [latest]}, {}).success_count, 1)
         self.assertEqual(self.rows("SELECT md5 FROM plugin_releases"), [(checksum,)])
 
+    def test_newer_custom_build_is_preferred_over_github_latest(self):
+        source = catalog(releases="[{tagName: 'custom', customLink: 'https://example.com/custom.xpi'}]")
+        github = release("6.0.8")
+        result = self.sync(source, {"demo/plugin": [github]}, {
+            github["assets"][0]["browser_download_url"]: manifest(version="6.0.8"),
+            'https://example.com/custom.xpi': manifest(version="6.0.86"),
+        })
+        self.assertEqual(result.success_count, 1, result.failures)
+        self.assertEqual(self.rows("SELECT manifest_version, asset_url FROM plugin_releases WHERE release_key='latest'"),
+                         [("6.0.86", "https://example.com/custom.xpi")])
+        self.assertEqual(self.rows("SELECT manifest_version FROM plugin_releases WHERE release_key='discovered@6.0.8'"),
+                         [("6.0.8",)])
+        raw = self.rows("SELECT manifest_json FROM plugin_releases WHERE release_key='latest'")[0][0]
+        self.assertEqual(json.loads(raw)['version'], '6.0.86')
+
     def test_default_source_loads_both_catalogs_and_deduplicates_aliases(self):
         active = catalog(fields="aliases: ['old/plugin'],")
         legacy = catalog(repo="old/plugin", export="deprecatedPlugins")

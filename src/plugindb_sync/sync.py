@@ -4,7 +4,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
+from itertools import zip_longest
 from pathlib import Path
+import re
 from typing import Any
 from urllib.parse import urlparse
 from zipfile import BadZipFile
@@ -341,6 +343,20 @@ def _build_locales(manifest: dict[str, Any], repo_fields: dict[str, Any]) -> lis
     return items
 
 
+def _compare_manifest_versions(left: str, right: str) -> int:
+    # Match upstream's Mozilla-style comparison: numeric parts sort numerically,
+    # and a stable numeric component sorts after a prerelease label.
+    for a, b in zip_longest(re.split(r"[.-]", left.lstrip("vV")),
+                          re.split(r"[.-]", right.lstrip("vV")), fillvalue="0"):
+        if "*" in (a, b):
+            continue
+        x = (1, int(a)) if a.isdigit() else (0, a.casefold())
+        y = (1, int(b)) if b.isdigit() else (0, b.casefold())
+        if x != y:
+            return 1 if x > y else -1
+    return 0
+
+
 def _build_plugin_record(
     plugin: PluginRef,
     release_payloads: dict[str, dict[str, Any]],
@@ -350,6 +366,24 @@ def _build_plugin_record(
     preferred_release = release_payloads.get("latest") or release_payloads.get("pre")
     if not preferred_release:
         preferred_release = next(iter(release_payloads.values()))
+    if plugin.discover_releases:
+        stable = [item for item in release_payloads.values()
+                  if not item["prerelease"] and item["manifest_version"]]
+        if stable:
+            best = stable[0]
+            for item in stable[1:]:
+                if _compare_manifest_versions(item["manifest_version"], best["manifest_version"]) > 0:
+                    best = item
+            preferred_release = best
+            discovered = release_payloads.get("latest")
+            if discovered is not None and discovered is not best:
+                # Soil prefers the `latest` key. A custom/pinned build may be
+                # newer than GitHub's latest release; retain both downloads.
+                release_payloads = dict(release_payloads)
+                if not any(key != "latest" and item["asset_url"] == discovered["asset_url"]
+                           for key, item in release_payloads.items()):
+                    release_payloads[f"discovered@{discovered['tag']}"] = discovered
+                release_payloads["latest"] = best
 
     manifest_payload = dict(preferred_release["manifest"])
     plugin_id = manifest_payload["zotero"]["id"]
@@ -371,6 +405,7 @@ def _build_plugin_record(
             "manifest_version": item["manifest_version"],
             "manifest_min_zotero_version": item["manifest_min_zotero_version"],
             "manifest_max_zotero_version": item["manifest_max_zotero_version"],
+            "manifest_json": item["manifest_json"],
         }
 
     unique_download_counts = {
