@@ -3,12 +3,16 @@ from __future__ import annotations
 from html.parser import HTMLParser
 import json
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
 
 DEFAULT_TIMEOUT = 30
 GITHUB_BASE_URL = "https://github.com"
+
+
+class MissingAssetError(ValueError):
+    """A release does not contain the requested plugin artifact."""
 
 
 class NoReleaseError(ValueError):
@@ -149,10 +153,10 @@ def pick_xpi_asset(
 
     if asset_name:
         for asset in assets:
-            if isinstance(asset, dict) and asset.get("name") == asset_name:
+            if isinstance(asset, dict) and unquote(str(asset.get("name") or "")) == unquote(asset_name):
                 return asset
         if not allow_fallback:
-            raise ValueError(f"Asset {asset_name!r} missing from release {release.get('tag_name')}")
+            raise MissingAssetError(f"Asset {asset_name!r} missing from release {release.get('tag_name')}")
 
     candidates = []
     for asset in assets:

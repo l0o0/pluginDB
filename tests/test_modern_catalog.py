@@ -54,6 +54,27 @@ class ModernCatalogTest(unittest.TestCase):
         finally:
             engine.dispose()
 
+    def test_percent_encoded_asset_name(self):
+        self.assertEqual(pick_xpi_asset(release("v1", ("plugin@local.xpi",)),
+                                       "plugin%40local.xpi")["name"], "plugin@local.xpi")
+
+    def test_missing_historical_asset_keeps_current_release(self):
+        latest = release("v2")
+        old = release("v1", ("other.xpi",), date="2025-01-01T00:00:00Z")
+        result = self.sync(catalog(releases="[{tagName: 'v1', assetName: 'missing.xpi'}]"),
+                           {"demo/plugin": [latest, old]},
+                           {latest["assets"][0]["browser_download_url"]: manifest()})
+        self.assertEqual(result.success_count, 1)
+        self.assertEqual(result.failure_count, 0)
+        self.assertIn("action=unavailable_release", self.output.getvalue())
+        self.assertEqual(len(self.rows("select * from plugins")), 1)
+
+    def test_all_missing_artifacts_remain_failure(self):
+        result = self.sync(catalog(releases="[{tagName: 'v1', assetName: 'missing.xpi'}]"),
+                           {"demo/plugin": []}, {})
+        self.assertEqual(result.success_count, 0)
+        self.assertEqual(result.failure_count, 1)
+
     def test_parses_modern_fields_without_comment_or_dev_entries(self):
         source = catalog(
             releases="[{tagName: 'v1', assetName: 'plugin.zip', targetZoteroVersion: '6'}]",
@@ -138,12 +159,12 @@ class ModernCatalogTest(unittest.TestCase):
         self.assertEqual(result.success_count, 1, result.failures)
         self.assertEqual(self.rows("SELECT tag FROM plugin_releases"), [("plugin-v1",)])
 
-    def test_failed_pin_preserves_previous_database_record(self):
+    def test_all_unavailable_releases_preserve_previous_database_record(self):
         latest = release("v2")
         manifests = {latest["assets"][0]["browser_download_url"]: manifest()}
         self.assertEqual(self.sync(catalog(), {"demo/plugin": [latest]}, manifests).success_count, 1)
         before = self.rows("SELECT * FROM plugins")
-        result = self.sync(catalog(releases="[{tagName: 'missing'}]"), {"demo/plugin": [latest]}, manifests)
+        result = self.sync(catalog(releases="[{tagName: 'missing'}]"), {"demo/plugin": []}, manifests)
         self.assertEqual(result.failure_count, 1)
         self.assertEqual(self.rows("SELECT * FROM plugins"), before)
 
