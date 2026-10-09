@@ -54,6 +54,15 @@ class ModernCatalogTest(unittest.TestCase):
         finally:
             engine.dispose()
 
+    def test_removed_plugin_and_alias_are_excluded(self):
+        for repo, fields in [("wdcpclover/ai4paper", ""),
+                             ("new/renamed", "aliases: ['WDCPClOVER/AI4Paper'],")]:
+            with self.subTest(repo=repo):
+                result = self.sync(catalog(repo=repo, fields=fields), {}, {})
+                self.assertEqual(result.plugin_count, 0)
+                self.assertEqual(result.failure_count, 0)
+                self.assertEqual(self.rows("select * from plugins"), [])
+
     def test_percent_encoded_asset_name(self):
         self.assertEqual(pick_xpi_asset(release("v1", ("plugin@local.xpi",)),
                                        "plugin%40local.xpi")["name"], "plugin@local.xpi")

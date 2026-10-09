@@ -23,6 +23,10 @@ DEFAULT_PLUGINS_TS_URL = "https://raw.githubusercontent.com/zotero-chinese/zoter
 DEFAULT_DEPRECATED_TS_URL = "https://raw.githubusercontent.com/zotero-chinese/zotero-plugins/main/src/deprecated.ts"
 
 
+# Store removals must remain excluded even if an upstream catalog lists them again.
+EXCLUDED_REPOS = frozenset({"wdcpclover/ai4paper"})
+
+
 @dataclass(frozen=True)
 class SyncResult:
     plugin_count: int
@@ -88,7 +92,9 @@ def _load_catalog(
                 tags=list(dict.fromkeys(previous.tags + plugin.tags)),
                 aliases=list(dict.fromkeys(previous.aliases + plugin.aliases)),
             )
-    return list(merged.values())
+    return [plugin for plugin in merged.values()
+            if not EXCLUDED_REPOS.intersection(
+                repo.lower() for repo in [plugin.repo, *plugin.aliases])]
 
 
 @dataclass(frozen=True)
